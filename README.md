@@ -13,3 +13,4 @@ Dev Note 19/03 :
 - Ajout bouton mode sombre (code de Amine)
 - Création docu pour repreneur
 - Séparation json
+site deploye : ddt90-platforme.netlify.app
