@@ -793,12 +793,8 @@ document.addEventListener('DOMContentLoaded', function() {
   majTaille(1);
   initTheme();
 
-  /* Tutoriel : affiche si jamais vu (localStorage) */
-  var dejaVu = false;
-  try { dejaVu = localStorage.getItem('ddt90_tuto_v3') === '1'; } catch(e) {}
-  if (!dejaVu) {
-    setTimeout(afficherTutoriel, 80);
-  }
+  /* Tutoriel : affiché à chaque démarrage */
+  setTimeout(afficherTutoriel, 80);
 });
 
 /* ════════════════════════════════════════════════════════════════════
@@ -3088,7 +3084,7 @@ var TUTO_SLIDES = [
             '</div>' +
           '</div>' +
           '<div class="tuto-feat">' +
-            '<span class="tuto-feat-ico">4&#xFE0F;&#x20E3;</span>' +
+            '<span class="tuto-feat-ico">3&#xFE0F;&#x20E3;</span>' +
             '<div class="tuto-feat-body">' +
               '<div class="tuto-feat-titre">Couches thematiques Atlas</div>' +
               '<div class="tuto-feat-desc">Activez les 11 couches de l\'Atlas (risques, eau, biodiversite, urbanisme...) pour visualiser les enjeux directement sur la carte.</div>' +

@@ -1775,6 +1775,31 @@ body.dark-mode .leaflet-tile-pane {
 /* ════════════════════════════════════════════════════════════════════
    DARK MODE BUTTON — in header
    ════════════════════════════════════════════════════════════════════ */
+
+/* ── Bouton tutoriel (header) ── */
+#tuto-btn {
+  position: static;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,.22);
+  background: rgba(255,255,255,.12);
+  color: #fff;
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: 8px;
+  transition: background .18s ease, transform .18s ease;
+}
+#tuto-btn:hover {
+  background: rgba(255,255,255,.28);
+  transform: scale(1.1);
+}
+
 #dark-mode-toggle {
   /* Override the old fixed-position style */
   position: static;
