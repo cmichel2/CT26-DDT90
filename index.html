@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>DDT 90 — Aide a la Decision</title>
+  <title>DDT 90 — Aide à la Décision</title>
   <!-- Polices : Source Serif 4 (titres) + Inter (interface) -->
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,300;0,400;0,600;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"/>
@@ -32,7 +32,7 @@
   <div class="tricolore"><span></span><span></span><span></span></div>
   <div class="hdr-sep"></div>
   <div class="hdr-title">
-    Logiciel Interactif d'Aide a la Decision
+    Logiciel Interactif d'Aide à la Décision
     <small>Direction Departementale des Territoires &mdash; Territoire de Belfort (DDT 90)</small>
   </div>
   <!-- Barre de recherche d'adresse (Nominatim / OSM) -->
@@ -53,6 +53,7 @@
   </div>
 
   <div id="hdr-badge"><span class="dot"></span><span id="hdr-badge-txt"></span></div>
+  <button id="dark-mode-toggle" onclick="toggleDarkMode()" title="Activer le mode sombre"><span id="dark-mode-icon">🌙</span></button>
 </header>
 
 <!-- ──────────────────────────────────────────────────────────────
@@ -67,7 +68,7 @@
 
     <!-- Menu secondaire : sous-type (apparait apres selection du type) -->
     <div id="sous-types-wrap">
-      <div id="sous-types-label">Precisez votre projet</div>
+      <div id="sous-types-label">Précisez votre projet</div>
       <div class="grille-sous-types" id="grille-sous-types"></div>
       <div id="stype-desc"></div>
     </div>
@@ -100,6 +101,16 @@
       <span id="btn-placer-txt">Placer le projet sur la carte</span>
     </button>
 
+    <!-- Avertissement placement obligatoire -->
+    <div id="placement-requis">
+      <div class="placement-requis-ico">&#x1F4CD;</div>
+      <div class="placement-requis-titre">Localisation requise</div>
+      <div class="placement-requis-desc">Placez votre projet sur la carte pour analyser les enjeux et decouvrir les projets similaires alentours.</div>
+      <button class="btn-placer-now" onclick="togglePlacement()">
+        &#x1F4CD; Placer maintenant
+      </button>
+    </div>
+
     <div class="pos-info" id="pos-info">
       <span>&#x2705;</span><span id="pos-txt"></span>
     </div>
@@ -121,10 +132,10 @@
 
   <!-- 4. Couches thématiques carte -->
   <div class="section">
-    <div class="s-titre"><div class="s-num">4</div><div class="s-txt">Couches de l'Atlas DDT 90</div></div>
+    <div class="s-titre"><div class="s-num">4</div><div class="s-txt">Filtres cartographiques</div></div>
     <p style="font-size:.7rem;color:var(--ink-3);margin-bottom:9px;line-height:1.55;">
-      11 chapitres de l'Atlas 2025-2026.
-      Activez une couche pour visualiser les donnees sur la carte.
+      Données tirées de l'Atlas cartographique 2025-2026 de la DDT 90.
+      Activez une couche pour visualiser les données sur la carte.
     </p>
     <div class="layer-grid" id="layer-grid"></div>
   </div>
@@ -145,7 +156,7 @@
     <div class="guide">
       <strong>&#x2139; Mode d'emploi</strong>
       <ul>
-        <li>Selectionnez le type de projet</li>
+        <li>Sélectionnez le type de projet</li>
         <li>Renseignez la superficie et placez le projet sur la carte</li>
         <li>Double-cliquez sur le projet pour le deplacer</li>
         <li>Activez les couches thematiques pour voir les enjeux sur la carte</li>
@@ -157,69 +168,117 @@
 </aside>
 
 <!-- ──────────────────────────────────────────────────────────────
-     PANNEAU DROIT — Fiches enjeux
+     PANNEAU DROIT — Enjeux + Simulation
      ────────────────────────────────────────────────────────────── -->
 <aside id="panneau-droit" class="panneau">
-  <div id="enjeux-hdr">
-    <h2>Enjeux du projet</h2>
-    <p id="enjeux-sous-titre">Selectionnez un projet pour afficher les enjeux</p>
-  </div>
-  <div id="msg-accueil">
-    <div class="accueil-ico">&#x1F5FA;</div>
-    <h3>Atlas cartographique DDT 90</h3>
-    <p>Configurez votre projet dans le panneau de gauche puis cliquez sur <strong>Analyser les enjeux</strong> pour obtenir les fiches de vigilance issues de l'Atlas 2025-2026.</p>
+
+  <!-- ── Barre d'onglets ── -->
+  <div id="tabs-bar">
+    <button class="tab-btn actif" id="tab-btn-enjeux"     onclick="switchTab('enjeux')">&#x26A0;&#xFE0F; Enjeux</button>
+    <button class="tab-btn"       id="tab-btn-simulation" onclick="switchTab('simulation')">&#x1F4CA; Simulation</button>
   </div>
 
-  <!-- Liste des fiches enjeux (generee par JS) -->
-  <div id="liste-enjeux" style="display:none;"></div>
+  <!-- ══ ONGLET ENJEUX ══════════════════════════════════════════ -->
+  <div id="tab-enjeux" class="tab-pane">
 
-  <!-- ── Section contacts — visible apres analyse ── -->
-  <div id="section-contacts" style="display:none;">
+    <div id="enjeux-hdr">
+      <h2>Enjeux du projet</h2>
+      <p id="enjeux-sous-titre">Sélectionnez un projet pour afficher les enjeux</p>
+    </div>
 
-    <!-- Bouton principal pour ouvrir/fermer la section -->
-    <div id="contacts-trigger" onclick="toggleContacts()">
-      <div class="contacts-trigger-inner">
-        <span class="contacts-trigger-ico">&#x1F4DE;</span>
-        <div class="contacts-trigger-txt">
-          <span class="contacts-trigger-label">Contacter les acteurs du territoire</span>
-          <span class="contacts-trigger-sub">Experts, services de l'Etat et partenaires locaux</span>
+    <div id="msg-accueil">
+      <div class="accueil-ico">&#x1F5FA;</div>
+      <h3>Atlas cartographique DDT 90</h3>
+      <p>Configurez votre projet dans le panneau de gauche puis cliquez sur <strong>Analyser les enjeux</strong> pour obtenir les fiches de vigilance issues de l'Atlas 2025-2026.</p>
+    </div>
+
+    <!-- Liste des fiches enjeux -->
+    <div id="liste-enjeux" style="display:none;"></div>
+
+    <!-- Section contacts -->
+    <div id="section-contacts" style="display:none;">
+      <div id="contacts-trigger" onclick="toggleContacts()">
+        <div class="contacts-trigger-inner">
+          <span class="contacts-trigger-ico">&#x1F4DE;</span>
+          <div class="contacts-trigger-txt">
+            <span class="contacts-trigger-label">Contacter les acteurs du territoire</span>
+            <span class="contacts-trigger-sub">Experts, services de l'Etat et partenaires locaux</span>
+          </div>
+          <span class="contacts-trigger-chev" id="contacts-chev">&#x25BC;</span>
         </div>
-        <span class="contacts-trigger-chev" id="contacts-chev">&#x25BC;</span>
+      </div>
+      <div id="contacts-panel" class="contacts-hidden">
+        <div id="contacts-ctx"></div>
+        <div id="contacts-liste"></div>
       </div>
     </div>
 
-    <!-- Panneau de contacts depliable -->
-    <div id="contacts-panel" class="contacts-hidden">
-      <!-- Contexte du projet (resume) -->
-      <div id="contacts-ctx"></div>
-      <!-- Groupes de contacts generes par JS -->
-      <div id="contacts-liste"></div>
-    </div>
-
-  </div>
-
-  <!-- ── Section checklist — visible apres analyse ── -->
-  <div id="section-checklist" style="display:none;">
-
-    <!-- Bouton principal -->
-    <div id="checklist-trigger" onclick="toggleChecklist()">
-      <div class="checklist-trigger-inner">
-        <span class="checklist-trigger-ico">&#x2705;</span>
-        <div class="checklist-trigger-txt">
-          <span class="checklist-trigger-label">Checklist administrative</span>
-          <span class="checklist-trigger-sub">Toutes les etapes pour realiser votre projet</span>
+    <!-- Section checklist -->
+    <div id="section-checklist" style="display:none;">
+      <div id="checklist-trigger" onclick="toggleChecklist()">
+        <div class="checklist-trigger-inner">
+          <span class="checklist-trigger-ico">&#x2705;</span>
+          <div class="checklist-trigger-txt">
+            <span class="checklist-trigger-label">Checklist administrative</span>
+            <span class="checklist-trigger-sub">Toutes les étapes pour realiser votre projet</span>
+          </div>
+          <span class="checklist-trigger-chev" id="checklist-chev">&#x25BC;</span>
         </div>
-        <span class="checklist-trigger-chev" id="checklist-chev">&#x25BC;</span>
+      </div>
+      <div id="checklist-panel" class="cl-hidden">
+        <div id="checklist-ctx"></div>
+        <div id="checklist-body"></div>
       </div>
     </div>
 
-    <!-- Panneau depliable -->
-    <div id="checklist-panel" class="cl-hidden">
-      <div id="checklist-ctx"></div>
-      <div id="checklist-body"></div>
+    <!-- Section projets alentours (OSM) -->
+    <div id="section-alentours" style="display:none;">
+      <div id="alentours-trigger" onclick="toggleAlentours()">
+        <div class="alentours-trigger-inner">
+          <span class="alentours-trigger-ico">&#x1F50D;</span>
+          <div class="alentours-trigger-txt">
+            <span class="alentours-trigger-label">Projets similaires alentours</span>
+            <span class="alentours-trigger-sub">Établissements existants dans un rayon defini</span>
+          </div>
+          <span class="alentours-trigger-chev" id="alentours-chev">&#x25BC;</span>
+        </div>
+      </div>
+      <div id="alentours-panel" class="al-hidden">
+        <div class="al-rayon-wrap">
+          <label>Rayon :</label>
+          <input type="range" id="alentours-rayon-slider" min="500" max="10000" step="500" value="3000"
+            oninput="majRayonAlentours(this.value)">
+          <span class="al-rayon-val" id="al-rayon-txt">3 km</span>
+        </div>
+        <div id="alentours-liste"></div>
+      </div>
     </div>
 
-  </div>
+  </div><!-- #tab-enjeux fermé -->
+
+  <!-- ══ ONGLET SIMULATION ══════════════════════════════════════ -->
+  <div id="tab-simulation" class="tab-pane" style="display:none;">
+
+    <div id="sim-hdr">
+      <h2>&#x1F4CA; Simulation de projet</h2>
+      <p id="sim-sous-titre">Estimez la durée, la complexite et l'impact environnemental</p>
+    </div>
+
+    <!-- Etat vide (avant toute simulation) -->
+    <div id="sim-empty">
+      <div class="sim-empty-ico">&#x1F4CA;</div>
+      <div class="sim-empty-titre">Aucune simulation lancée</div>
+      <p class="sim-empty-desc">Configurez votre projet (type, taille, localisation sur la carte) dans le panneau gauche, puis cliquez sur le bouton ci-dessous.</p>
+      <button class="btn-sim-lancer" onclick="lancerSimulation()">
+        &#x25B6;&#xFE0F; Lancer la simulation
+      </button>
+    </div>
+
+    <!-- Resultats (affiches apres simulation) -->
+    <div id="sim-result" style="display:none;"></div>
+
+  </div><!-- #tab-simulation -->
+
 </aside>
 
 <!-- ──────────────────────────────────────────────────────────────
@@ -258,6 +317,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="enjeux-db.js"></script>
 <script src="app.js"></script>
+<!-- Note : enjeux-data.json est charge via fetch() dans loadEnjeuxData() -->
 
 <!-- ══════════════════════════════════════════════════════════════════
      TUTORIEL D'ONBOARDING + SERIOUS GAME
@@ -290,9 +350,5 @@
   </div>
 
 </div>
-<button id="dark-mode-toggle" onclick="toggleDarkMode()" title="Changer de mode">
-  <span id="dark-mode-icon">🌙</span>
-</button>
-
 </body>
 </html>
