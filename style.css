@@ -245,6 +245,29 @@ button { cursor: pointer; }
 }
 .pos-info.on { display: flex; }
 
+/* Icône poubelle inline dans pos-info */
+.btn-suppr-ico {
+  display: none;
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid #fca5a5;
+  background: #fff;
+  color: #dc2626;
+  font-size: 1rem;
+  cursor: pointer;
+  align-items: center; justify-content: center;
+  transition: background var(--t), transform .15s, box-shadow var(--t);
+  box-shadow: 0 1px 4px rgba(220,38,38,.12);
+}
+.btn-suppr-ico:hover {
+  background: #fee2e2;
+  transform: scale(1.12);
+  box-shadow: 0 2px 8px rgba(220,38,38,.25);
+}
+.pos-info.on .btn-suppr-ico { display: flex; }
+
 /* Bouton supprimer le projet */
 .btn-suppr {
   display: none; align-items: center; justify-content: center;
@@ -338,10 +361,7 @@ button { cursor: pointer; }
   border: 5px solid transparent;
   border-right-color: #111827;
 }
-#layer-tooltip-global.tip-left,
-.layer-tooltip-bubble.tip-left {
-  /* Flèche à droite quand la bulle est à gauche du ? */
-}
+
 #layer-tooltip-global.tip-left::before,
 .layer-tooltip-bubble.tip-left::before {
   right: auto; left: 100%;
@@ -2248,7 +2268,7 @@ body.dark-mode #sim-hdr              { background: rgba(11,17,30,.97); border-co
   flex-direction: column;
   gap: 14px;
 }
-.sim-jauge { }
+
 .sim-jauge-top {
   display: flex;
   align-items: baseline;
@@ -2565,7 +2585,7 @@ body.dark-mode .al-count-badge { background: #0c2a3f; color: #7dd3fc; }
 }
 
 /* dark mode */
-body.dark-mode #alentours-trigger { }
+
 body.dark-mode .al-item { background: #1f2937; border-color: #374151; }
 
 /* ════════════════════════════════════════════════════════════════════

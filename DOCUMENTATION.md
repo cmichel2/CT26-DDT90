@@ -548,10 +548,8 @@ Le badge `.contact-priorite` utilise `display:inline-block` + `flex-shrink:0` (p
 | Priorité | Action |
 |----------|--------|
 | 🔴 Haute | Séparer `app.js` en modules (couches, enjeux, simulation, rapport, contacts) |
-| 🔴 Haute | Externaliser les données dans des fichiers JSON (ENJEUX_MINDMAP, ENJEUX_ZONES…) |
 | 🔴 Haute | Vérifier `CONTACTS_DB` annuellement (téléphones, emails, noms) |
 | 🟠 Moyenne | Activer la catégorie `prevention` dans `rendreAccordeons` |
 | 🟠 Moyenne | Ajouter les PLU communaux (WFS GPU Géoplateforme) |
-| 🟠 Moyenne | Remplacer `COUCHES_DATA` GeoJSON embarqué par des flux WFS IGN temps réel |
 | 🟡 Basse | Mode hors-ligne via Service Worker (cache tiles IGN) |
 | 🟡 Basse | Export rapport PDF natif (Puppeteer côté serveur) |

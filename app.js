@@ -337,28 +337,74 @@ function placerProjet(lat, lng) {
 }
 
 function supprimerProjet() {
-  if (A.layerProjet) { A.carte.removeLayer(A.layerProjet); A.layerProjet = null; }
-  if (A.layerCercle) { A.carte.removeLayer(A.layerCercle); A.layerCercle = null; }
-  A.position = null;
-  document.getElementById('pos-info').classList.remove('on');
-  document.getElementById('btn-suppr').classList.remove('on');
-  document.getElementById('leg-projet').style.display = 'none';
-  desactiverDeplace();
-  /* Masquer les sections de résultats */
-  ['section-contacts','section-checklist','section-alentours'].forEach(function(id){
-    var el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  });
-  /* Nettoyer la couche alentours OSM */
-  if (typeof alentours !== 'undefined' && alentours.layer) {
-    A.carte.removeLayer(alentours.layer);
-    alentours.layer = null;
-    alentours.resultats = [];
-  }
-  /* Désactiver le bouton rapport */
-  A._lastFiltres = null; A._lastZonesResultats = null;
-  var btnRap = document.getElementById('btn-rapport');
-  if (btnRap) { btnRap.disabled = true; btnRap.style.opacity = '.4'; }
+  if (A.layerProjet) { A.carte.removeLayer(A.layerProjet); A.layerProjet = null; }
+  if (A.layerCercle) { A.carte.removeLayer(A.layerCercle); A.layerCercle = null; }
+  A.position = null;
+  document.getElementById('pos-info').classList.remove('on');
+  document.getElementById('btn-suppr').classList.remove('on');
+  document.getElementById('leg-projet').style.display = 'none';
+  desactiverDeplace();
+  ['section-contacts','section-checklist','section-alentours'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  if (typeof alentours !== 'undefined' && alentours.layer) {
+    A.carte.removeLayer(alentours.layer);
+    alentours.layer = null;
+    alentours.resultats = [];
+  }
+  A._lastFiltres = null; A._lastZonesResultats = null;
+  var btnRap = document.getElementById('btn-rapport');
+  if (btnRap) { btnRap.disabled = true; btnRap.style.opacity = '.4'; }
+}
+
+function supprimerProjetComplet() {
+  supprimerProjet();
+
+  // Réinitialiser le panneau enjeux
+  var listeEnjeux = document.getElementById('liste-enjeux');
+  if (listeEnjeux) { listeEnjeux.innerHTML = ''; listeEnjeux.style.display = 'none'; }
+  var msgAccueil = document.getElementById('msg-accueil');
+  if (msgAccueil) msgAccueil.style.display = '';
+  var enjHdr = document.querySelector('#enjeux-hdr h2');
+  if (enjHdr) enjHdr.textContent = 'Enjeux du projet';
+  var sousTitre = document.getElementById('enjeux-sous-titre');
+  if (sousTitre) sousTitre.innerHTML = 'Sélectionnez un projet pour afficher les enjeux<span id="rpg-spinner"></span>';
+
+  // Réinitialiser la simulation
+  var simResult = document.getElementById('sim-result');
+  if (simResult) { simResult.style.display = 'none'; simResult.innerHTML = ''; }
+  var simEmpty = document.getElementById('sim-empty');
+  if (simEmpty) simEmpty.style.display = '';
+  A._sim = null;
+
+  // Réinitialiser la checklist
+  checklistEtats = {};
+  checklistOuverte = false;
+  var clPanel = document.getElementById('checklist-panel');
+  if (clPanel) { clPanel.classList.remove('cl-visible'); clPanel.classList.add('cl-hidden'); }
+  var clTrigger = document.getElementById('checklist-trigger');
+  if (clTrigger) clTrigger.classList.remove('ouvert');
+
+  // Réinitialiser les contacts
+  contactsOuverts = false;
+  var ctPanel = document.getElementById('contacts-panel');
+  if (ctPanel) { ctPanel.classList.remove('contacts-visible'); ctPanel.classList.add('contacts-hidden'); }
+
+  // Supprimer le bandeau RPG
+  var rpgBandeau = document.getElementById('rpg-bandeau');
+  if (rpgBandeau) rpgBandeau.remove();
+  A._rpgParcelle = null;
+
+  // Masquer le badge header
+  var hdrBadge = document.getElementById('hdr-badge');
+  if (hdrBadge) hdrBadge.style.display = 'none';
+
+  // Réinitialiser les données contextuelles
+  A._zonesAgri = null;
+  A._axesMajeurs = null;
+
+  afficherToast('🗑\u00a0 Projet supprimé — état initial restauré');
 }
 
 /* ── Mode placement (simple clic) ──────────────────────────────── */
