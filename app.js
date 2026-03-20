@@ -2264,7 +2264,7 @@ var TUTO_SLIDES = [
             '</div>' +
           '</div>' +
           '<div class="tuto-feat">' +
-            '<span class="tuto-feat-ico">4&#xFE0F;&#x20E3;</span>' +
+            '<span class="tuto-feat-ico">3&#xFE0F;&#x20E3;</span>' +
             '<div class="tuto-feat-body">' +
               '<div class="tuto-feat-titre">Couches thematiques Atlas</div>' +
               '<div class="tuto-feat-desc">Activez les 11 couches de l\'Atlas (risques, eau, biodiversite, urbanisme...) pour visualiser les enjeux directement sur la carte.</div>' +
@@ -4642,7 +4642,7 @@ function genererRapportPDF(filtres, zonesResultats) {
       var anc = Math.cos(angle(i)) > 0.2 ? 'start' : Math.cos(angle(i)) < -0.2 ? 'end' : 'middle';
       return '<text x="'+lx.toFixed(1)+'" y="'+(ly+4).toFixed(1)+'" text-anchor="'+anc+'" font-size="11" font-weight="600" fill="#334155">'+lbl+'</text>';
     }).join('');
-    return '<svg width="320" height="320" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:0 auto;">'+rings+axes+poly+dots+valLabels+axeLabels+'</svg>';
+    return '<svg width="480" height="320" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:0 auto;">'+rings+axes+poly+dots+valLabels+axeLabels+'</svg>';
   }
 
   var radarVals   = [axeEco, axeEnv, axeSoc, axePol];
@@ -4943,7 +4943,7 @@ function genererRapportPDF(filtres, zonesResultats) {
     '<div class="two-col" style="align-items:start;">'+
       /* Radar */
       '<div>'+
-        '<div style="text-align:center;margin-bottom:10px;">'+radarHtml+'</div>'+
+        '<div style="margin-bottom:10px;">'+radarHtml+'</div>'+
       '</div>'+
 
       /* Scores + explication */
