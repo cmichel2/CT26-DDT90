@@ -4,43 +4,42 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>DDT 90 — Aide à la Décision</title>
-  <!-- Polices : Source Serif 4 (titres) + Inter (interface) -->
+
+  <!-- Polices Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,300;0,400;0,600;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+
   <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <!-- Feuille de style DDT 90 -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+
+  <!-- Style DDT 90 -->
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
 
-<!-- ──────────────────────────────────────────────────────────────
-     CARTE — fond plein écran (z-index 0, sous tout le reste)
-     ────────────────────────────────────────────────────────────── -->
+<!-- Carte plein écran (z-index 0, sous tout le reste) -->
 <div id="map"></div>
 
-<!-- Notification flottante : mode placement / déplacement -->
+<!-- Notifications flottantes -->
 <div id="notif-placement"></div>
-
-<!-- Toast de confirmation de recherche -->
 <div id="search-toast"></div>
 
-<!-- ──────────────────────────────────────────────────────────────
-     EN-TÊTE INSTITUTIONNEL
-     ────────────────────────────────────────────────────────────── -->
+<!-- ── En-tête ──────────────────────────────────────────────────────────── -->
 <header id="header">
   <div class="tricolore"><span></span><span></span><span></span></div>
   <div class="hdr-sep"></div>
   <div class="hdr-title">
     Logiciel Interactif d'Aide à la Décision
-    <small>Direction Departementale des Territoires &mdash; Territoire de Belfort (DDT 90)</small>
+    <small>Direction Départementale des Territoires &mdash; Territoire de Belfort (DDT 90)</small>
   </div>
-  <!-- Barre de recherche d'adresse (Nominatim / OSM) -->
+
+  <!-- Recherche d'adresse (Nominatim / OSM) -->
   <div id="search-wrap">
     <div id="search-box">
       <span id="search-ico">&#x1F50D;</span>
-      <input id="search-input"
-             type="text"
+      <input id="search-input" type="text"
              placeholder="Rechercher une adresse ou une commune..."
              autocomplete="off"
              oninput="onSearchInput()"
@@ -48,26 +47,22 @@
       <button id="search-clear" onclick="clearSearch()" title="Effacer">&#x2715;</button>
       <button id="search-btn"   onclick="lancerRecherche()" title="Rechercher">&#x2192;</button>
     </div>
-    <!-- Liste de suggestions -->
     <ul id="search-suggestions" class="search-sugg-hidden"></ul>
   </div>
 
   <div id="hdr-badge"><span class="dot"></span><span id="hdr-badge-txt"></span></div>
+  <button id="btn-rapport" onclick="lancerRapport()" title="Générer le rapport PDF" disabled style="opacity:.4;">&#x1F4C4; Rapport</button>
   <button id="tuto-btn" onclick="afficherTutoriel()" title="Ouvrir le tutoriel">&#x2753;</button>
   <button id="dark-mode-toggle" onclick="toggleDarkMode()" title="Activer le mode sombre"><span id="dark-mode-icon">🌙</span></button>
 </header>
 
-<!-- ──────────────────────────────────────────────────────────────
-     PANNEAU GAUCHE — Paramétrage du projet
-     ────────────────────────────────────────────────────────────── -->
+<!-- ── Panneau gauche — Paramétrage du projet ───────────────────────────── -->
 <aside id="panneau-gauche" class="panneau">
 
   <!-- 1. Type de projet -->
   <div class="section">
     <div class="s-titre"><div class="s-num">1</div><div class="s-txt">Type de projet</div></div>
     <div class="grille-types" id="grille-types"></div>
-
-    <!-- Menu secondaire : sous-type (apparait apres selection du type) -->
     <div id="sous-types-wrap">
       <div id="sous-types-label">Précisez votre projet</div>
       <div class="grille-sous-types" id="grille-sous-types"></div>
@@ -81,12 +76,12 @@
 
     <div class="sup-row">
       <div class="inp-wrap">
-        <label class="inp-lbl" for="inp-sup">Superficie estimee</label>
+        <label class="inp-lbl" for="inp-sup">Superficie estimée</label>
         <input class="inp" type="number" id="inp-sup" min="0.01" step="0.01"
                placeholder="ex. 2.5" oninput="majSuperficie()"/>
       </div>
       <div class="inp-wrap" style="max-width:90px;">
-        <label class="inp-lbl" for="sel-unite">Unite</label>
+        <label class="inp-lbl" for="sel-unite">Unité</label>
         <select class="sel" id="sel-unite" onchange="majSuperficie()">
           <option value="ha">ha</option>
           <option value="m2">m&#178;</option>
@@ -102,14 +97,11 @@
       <span id="btn-placer-txt">Placer le projet sur la carte</span>
     </button>
 
-    <!-- Avertissement placement obligatoire -->
     <div id="placement-requis">
       <div class="placement-requis-ico">&#x1F4CD;</div>
       <div class="placement-requis-titre">Localisation requise</div>
-      <div class="placement-requis-desc">Placez votre projet sur la carte pour analyser les enjeux et decouvrir les projets similaires alentours.</div>
-      <button class="btn-placer-now" onclick="togglePlacement()">
-        &#x1F4CD; Placer maintenant
-      </button>
+      <div class="placement-requis-desc">Placez votre projet sur la carte pour analyser les enjeux et découvrir les projets similaires alentours.</div>
+      <button class="btn-placer-now" onclick="togglePlacement()">&#x1F4CD; Placer maintenant</button>
     </div>
 
     <div class="pos-info" id="pos-info">
@@ -123,10 +115,9 @@
 
   <!-- 3. Envergure réglementaire -->
   <div class="section">
-    <div class="s-titre"><div class="s-num">3</div><div class="s-txt">Envergure reglementaire</div></div>
+    <div class="s-titre"><div class="s-num">3</div><div class="s-txt">Envergure réglementaire</div></div>
     <span class="taille-nom" id="taille-nom">Petit projet</span>
-    <input type="range" id="slider-taille" min="1" max="4" step="1" value="1"
-           oninput="majTaille(this.value)"/>
+    <input type="range" id="slider-taille" min="1" max="4" step="1" value="1" oninput="majTaille(this.value)"/>
     <div class="taille-grad"><span>Petit</span><span>Moyen</span><span>Grand</span><span>Majeur</span></div>
     <div class="taille-desc" id="taille-desc"></div>
   </div>
@@ -152,15 +143,15 @@
     <button id="btn-analyser" onclick="lancerAnalyse()">&#x1F50D;&nbsp; Analyser les enjeux</button>
   </div>
 
-  <!-- Guide -->
+  <!-- Guide rapide -->
   <div class="section">
     <div class="guide">
       <strong>&#x2139; Mode d'emploi</strong>
       <ul>
         <li>Sélectionnez le type de projet</li>
         <li>Renseignez la superficie et placez le projet sur la carte</li>
-        <li>Double-cliquez sur le projet pour le deplacer</li>
-        <li>Activez les couches thematiques pour voir les enjeux sur la carte</li>
+        <li>Double-cliquez sur le projet pour le déplacer</li>
+        <li>Activez les couches thématiques pour voir les enjeux sur la carte</li>
         <li>Ajustez l'envergure et les filtres, puis cliquez sur Analyser</li>
       </ul>
     </div>
@@ -168,23 +159,21 @@
 
 </aside>
 
-<!-- ──────────────────────────────────────────────────────────────
-     PANNEAU DROIT — Enjeux + Simulation
-     ────────────────────────────────────────────────────────────── -->
+<!-- ── Panneau droit — Enjeux + Simulation ──────────────────────────────── -->
 <aside id="panneau-droit" class="panneau">
 
-  <!-- ── Barre d'onglets ── -->
+  <!-- Barre d'onglets -->
   <div id="tabs-bar">
     <button class="tab-btn actif" id="tab-btn-enjeux"     onclick="switchTab('enjeux')">&#x26A0;&#xFE0F; Enjeux</button>
     <button class="tab-btn"       id="tab-btn-simulation" onclick="switchTab('simulation')">&#x1F4CA; Simulation</button>
   </div>
 
-  <!-- ══ ONGLET ENJEUX ══════════════════════════════════════════ -->
+  <!-- Onglet Enjeux -->
   <div id="tab-enjeux" class="tab-pane">
 
     <div id="enjeux-hdr">
       <h2>Enjeux du projet</h2>
-      <p id="enjeux-sous-titre">Sélectionnez un projet pour afficher les enjeux</p>
+      <p id="enjeux-sous-titre">Sélectionnez un projet pour afficher les enjeux<span id="rpg-spinner"></span></p>
     </div>
 
     <div id="msg-accueil">
@@ -193,17 +182,16 @@
       <p>Configurez votre projet dans le panneau de gauche puis cliquez sur <strong>Analyser les enjeux</strong> pour obtenir les fiches de vigilance issues de l'Atlas 2025-2026.</p>
     </div>
 
-    <!-- Liste des fiches enjeux -->
     <div id="liste-enjeux" style="display:none;"></div>
 
-    <!-- Section contacts -->
+    <!-- Contacts acteurs -->
     <div id="section-contacts" style="display:none;">
       <div id="contacts-trigger" onclick="toggleContacts()">
         <div class="contacts-trigger-inner">
           <span class="contacts-trigger-ico">&#x1F4DE;</span>
           <div class="contacts-trigger-txt">
             <span class="contacts-trigger-label">Contacter les acteurs du territoire</span>
-            <span class="contacts-trigger-sub">Experts, services de l'Etat et partenaires locaux</span>
+            <span class="contacts-trigger-sub">Experts, services de l'État et partenaires locaux</span>
           </div>
           <span class="contacts-trigger-chev" id="contacts-chev">&#x25BC;</span>
         </div>
@@ -214,14 +202,14 @@
       </div>
     </div>
 
-    <!-- Section checklist -->
+    <!-- Checklist administrative -->
     <div id="section-checklist" style="display:none;">
       <div id="checklist-trigger" onclick="toggleChecklist()">
         <div class="checklist-trigger-inner">
           <span class="checklist-trigger-ico">&#x2705;</span>
           <div class="checklist-trigger-txt">
             <span class="checklist-trigger-label">Checklist administrative</span>
-            <span class="checklist-trigger-sub">Toutes les étapes pour realiser votre projet</span>
+            <span class="checklist-trigger-sub">Toutes les étapes pour réaliser votre projet</span>
           </div>
           <span class="checklist-trigger-chev" id="checklist-chev">&#x25BC;</span>
         </div>
@@ -232,14 +220,14 @@
       </div>
     </div>
 
-    <!-- Section projets alentours (OSM) -->
+    <!-- Projets alentours (OSM) -->
     <div id="section-alentours" style="display:none;">
       <div id="alentours-trigger" onclick="toggleAlentours()">
         <div class="alentours-trigger-inner">
           <span class="alentours-trigger-ico">&#x1F50D;</span>
           <div class="alentours-trigger-txt">
             <span class="alentours-trigger-label">Projets similaires alentours</span>
-            <span class="alentours-trigger-sub">Établissements existants dans un rayon defini</span>
+            <span class="alentours-trigger-sub">Établissements existants dans un rayon défini</span>
           </div>
           <span class="alentours-trigger-chev" id="alentours-chev">&#x25BC;</span>
         </div>
@@ -248,59 +236,62 @@
         <div class="al-rayon-wrap">
           <label>Rayon :</label>
           <input type="range" id="alentours-rayon-slider" min="500" max="10000" step="500" value="3000"
-            oninput="majRayonAlentours(this.value)">
+                 oninput="majRayonAlentours(this.value)">
           <span class="al-rayon-val" id="al-rayon-txt">3 km</span>
         </div>
         <div id="alentours-liste"></div>
       </div>
     </div>
 
-  </div><!-- #tab-enjeux fermé -->
+  </div><!-- #tab-enjeux -->
 
-  <!-- ══ ONGLET SIMULATION ══════════════════════════════════════ -->
+  <!-- Onglet Simulation -->
   <div id="tab-simulation" class="tab-pane" style="display:none;">
 
     <div id="sim-hdr">
       <h2>&#x1F4CA; Simulation de projet</h2>
-      <p id="sim-sous-titre">Estimez la durée, la complexite et l'impact environnemental</p>
+      <p id="sim-sous-titre">Estimez la durée, la complexité et l'impact environnemental</p>
     </div>
 
-    <!-- Etat vide (avant toute simulation) -->
     <div id="sim-empty">
       <div class="sim-empty-ico">&#x1F4CA;</div>
       <div class="sim-empty-titre">Aucune simulation lancée</div>
-      <p class="sim-empty-desc">Configurez votre projet (type, taille, localisation sur la carte) dans le panneau gauche, puis cliquez sur le bouton ci-dessous.</p>
-      <button class="btn-sim-lancer" onclick="lancerSimulation()">
-        &#x25B6;&#xFE0F; Lancer la simulation
-      </button>
+      <p class="sim-empty-desc">Configurez votre projet (type, taille, localisation) dans le panneau gauche, puis cliquez sur le bouton ci-dessous.</p>
+      <button class="btn-sim-lancer" onclick="lancerSimulation()">&#x25B6;&#xFE0F; Lancer la simulation</button>
     </div>
 
-    <!-- Resultats (affiches apres simulation) -->
     <div id="sim-result" style="display:none;"></div>
 
   </div><!-- #tab-simulation -->
 
 </aside>
 
-<!-- ──────────────────────────────────────────────────────────────
-     LÉGENDE CARTE
-     ────────────────────────────────────────────────────────────── -->
+<!-- ── Légende ───────────────────────────────────────────────────────────── -->
 <div id="legende">
-  <h4>Legende</h4>
-  <div class="leg-item"><div class="leg-dot" style="background:#002395;"></div><span>Chef-lieu</span></div>
-  <div class="leg-item"><div class="leg-dot" style="background:#1540a8;"></div><span>Commune principale</span></div>
-  <div class="leg-item"><div class="leg-line"></div><span>Limite departement 90</span></div>
-  <div class="leg-item" id="leg-projet" style="display:none;">
-    <div class="leg-dot" style="background:#dc2626;border:2px solid #fff;box-shadow:0 0 0 1px #dc2626;"></div>
-    <span>Projet positionne</span>
+  <div class="leg-header" onclick="toggleLegende()" style="cursor:pointer;" title="Réduire / Agrandir la légende">
+    <h4>Légende</h4>
+    <div style="display:flex;align-items:center;gap:5px;">
+      <span class="leg-ign-source" title="Certaines couches proviennent de la Géoplateforme IGN">
+        <span class="leg-ign-badge">IGN</span>
+      </span>
+      <span id="leg-toggle-ico" style="font-size:.7rem;color:var(--ink-3);transition:transform .2s;">▲</span>
+    </div>
   </div>
-  <!-- Entrées des couches thématiques actives (générées par JS) -->
-  <div id="legende-couches"></div>
+  <div id="leg-body">
+    <div class="leg-section">Fond de carte</div>
+    <div class="leg-item"><div class="leg-dot" style="background:#002395;"></div><span class="leg-label">Chef-lieu (Belfort)</span></div>
+    <div class="leg-item"><div class="leg-dot" style="background:#1540a8;width:8px;height:8px;"></div><span class="leg-label">Commune principale</span></div>
+    <div class="leg-item"><div class="leg-line"></div><span class="leg-label">Limite département 90</span></div>
+    <div class="leg-item"><div class="leg-commune-poly"></div><span class="leg-label">Communes (101)</span></div>
+    <div class="leg-item" id="leg-projet" style="display:none;">
+      <div class="leg-dot" style="background:#dc2626;border:2px solid #fff;box-shadow:0 0 0 1px #dc2626;"></div>
+      <span class="leg-label">Projet positionné</span>
+    </div>
+    <div id="legende-couches"></div>
+  </div>
 </div>
 
-<!-- ──────────────────────────────────────────────────────────────
-     MODALE — Fiche détaillée atlas
-     ────────────────────────────────────────────────────────────── -->
+<!-- ── Modale fiche atlas ─────────────────────────────────────────────────── -->
 <div id="modale-bg" onclick="fermerModale(event)">
   <div id="modale">
     <div id="modale-hdr">
@@ -312,44 +303,41 @@
   </div>
 </div>
 
-<!-- ──────────────────────────────────────────────────────────────
-     SCRIPTS — ordre important : DB d'abord, logique ensuite
-     ────────────────────────────────────────────────────────────── -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="enjeux-db.js"></script>
-<script src="app.js"></script>
-<!-- Note : enjeux-data.json est charge via fetch() dans loadEnjeuxData() -->
-
-<!-- ══════════════════════════════════════════════════════════════════
-     TUTORIEL D'ONBOARDING + SERIOUS GAME
-     Affiché au premier chargement. Stocké dans localStorage.
-     ══════════════════════════════════════════════════════════════════ -->
+<!-- ── Tutoriel d'onboarding + Serious game ──────────────────────────────── -->
 <div id="tuto-overlay">
-
-  <!-- ── Barre de progression en haut ── -->
-  <div id="tuto-progress-bar">
-    <div id="tuto-progress-fill"></div>
-  </div>
-
-  <!-- ── Conteneur de la slide active ── -->
+  <div id="tuto-progress-bar"><div id="tuto-progress-fill"></div></div>
   <div id="tuto-card">
-
-    <!-- Bouton fermer (visible sauf slide 0) -->
-    <button id="tuto-skip" onclick="fermerTutoriel()">
-      Passer le tutoriel &nbsp;&#x2715;
-    </button>
-
-    <!-- Contenu injecté par JS -->
+    <button id="tuto-skip" onclick="fermerTutoriel()">Passer le tutoriel &nbsp;&#x2715;</button>
     <div id="tuto-content"></div>
-
-    <!-- Navigation -->
     <div id="tuto-nav">
-      <button id="tuto-prev" onclick="tutoNav(-1)">&#x2190; Precedent</button>
+      <button id="tuto-prev" onclick="tutoNav(-1)">&#x2190; Précédent</button>
       <div id="tuto-dots"></div>
       <button id="tuto-next" onclick="tutoNav(1)">Suivant &#x2192;</button>
     </div>
   </div>
-
 </div>
+
+<!-- ── Scripts ───────────────────────────────────────────────────────────────
+     Ordre : bibliothèques → config → modules → app (point d'entrée)
+     Les données volumineuses sont chargées via fetch() dans app.js.
+     ──────────────────────────────────────────────────────────────────────── -->
+
+<!-- Bibliothèques externes -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Configuration (petits fichiers, chargement synchrone) -->
+
+<!-- Modules métier -->
+
+<!-- Point d'entrée : état global A + chargement données + init -->
+
+  <!-- ── Scripts ───────────────────────────────────────────────── -->
+  <!-- 1. Leaflet -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV/XN2GqQI=" crossorigin=""></script>
+
+  <!-- 2. Application DDT 90 — données + logique -->
+  <script src="app.js"></script>
+
 </body>
 </html>

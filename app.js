@@ -1,769 +1,47 @@
-/* ════════════════════════════════════════════════════════════════════
-   DDT 90 — AIDE A LA DECISION — app.js
-   Logique applicative : carte, placement projet, couches thématiques,
-   analyse des enjeux, génération des fiches, modale.
+/* DDT 90 — LOGICIEL INTERACTIF D'AIDE À LA DÉCISION — app.js
+ * Logique applicative : carte Leaflet, couches IGN/GeoJSON, analyse enjeux,
+ * contacts, checklist, simulation, rapport PDF.
+ * Dépend de : enjeux-db.js  (GEOJSON_TB, TYPES, TAILLES, ENJEUX)
+ * Démarrage  : python3 -m http.server 8080  →  http://localhost:8080    */
 
-   Dépend de : enjeux-db.js (GEOJSON_TB, THEMES, TYPES, TAILLES, ENJEUX)
-   ════════════════════════════════════════════════════════════════════ */
+/* ── COUCHES THÉMATIQUES — Atlas DDT 90 (11 thèmes, C1–C91)
+   Styles visuels + tooltips. Couche agriculture branchée sur la
+   Géoplateforme IGN (WMTS). Les autres utilisent COUCHES_DATA (GeoJSON local).
+   Production : remplacer par des flux WFS IGN temps réel.           */
 
-/* ════════════════════════════════════════════════════════════════════
-   COUCHES THEMATIQUES — ATLAS DDT 90 2025-2026
-   Structure calquee exactement sur les chapitres de l'Atlas :
-     1. Organisation du territoire   (C1–C8)
-     2. Population, economie, services (C9–C15)
-     3. Nouvelles energies & climat  (C16–C26)
-     4. Agriculture                  (C27–C40)
-     5. Eau                          (C41–C49)
-     6. Biodiversite et foret        (C50–C58)
-     7. Risques naturels             (C56–C64)
-     8. Urbanisme & amenagement      (C65–C71)
-     9. Habitat et logement          (C72–C81)
-    10. Mobilites & securite routiere (C82–C87)
-    11. Autres thematiques           (C88–C91)
-   Les coordonnees sont des approximations fiables pour le 90.
-   En production : remplacer par les flux WFS de l'IGN / DDT 90.
-   ════════════════════════════════════════════════════════════════════ */
+/* ── COUCHES IGN GÉOPLATEFORME — WMTS sans clé API
+   Identifiants vérifiés : GetCapabilities mars 2026 (data.geopf.fr/wmts)
+   URL patron GPF_WMTS + &LAYER=XXX + &FORMAT=image/png|jpeg          */
 
-var COUCHE_STYLES = {
-  /* Couleur, fill, label, swatch + tooltip explicatif de ce que la couche affiche */
-  organisation: {
-    color: '#1d4ed8', fill: '#60a5fa', swatch: '#3b82f6',
-    label: 'Organisation du territoire',
-    tooltip: 'Affiche les 101 communes du Territoire de Belfort avec leurs limites administratives, les 3 EPCI (GBCA, CCVS, CCST), les cantons et la carte des zones d\'emploi. Utile pour situer le projet dans son contexte institutionnel.',
-  },
-  population: {
-    color: '#7c3aed', fill: '#c084fc', swatch: '#a855f7',
-    label: 'Population & Economie',
-    tooltip: 'Visualise la densité de population par commune, la pyramide des âges, les zones d\'emploi et les établissements économiques majeurs (Alstom, GE, PSA...). Indique la pression démographique et les bassins d\'emploi autour du projet.',
-  },
-  energie: {
-    color: '#b45309', fill: '#fb923c', swatch: '#f97316',
-    label: 'Energies renouvelables & Climat',
-    tooltip: 'Montre le potentiel solaire des toitures (cadastre solaire), les installations ENR existantes (PV, éolien, biomasse), les zones favorables à l\'éolien et les objectifs SRADDET BFC. Essentiel pour les projets de production d\'énergie.',
-  },
-  agriculture: {
-    color: '#15803d', fill: '#86efac', swatch: '#22c55e',
-    label: 'Agriculture & PAC',
-    tooltip: 'Affiche les parcelles agricoles (RPG-PAC), les zones vulnérables aux nitrates, les appellations et labels agricoles, et les surfaces de prairies permanentes. Obligatoire pour tout projet consommant du foncier agricole (CDPENAF).',
-  },
-  eau: {
-    color: '#0369a1', fill: '#38bdf8', swatch: '#0ea5e9',
-    label: 'Eau, cours d\'eau & SAGE',
-    tooltip: 'Trace les cours d\'eau (Savoureuse, Bourbeuse, Allaine, Allan), les zones humides probables, les périmètres de captages AEP, le périmètre du SAGE Allan et les zones vulnérables nitrates. Crucial pour les dossiers Loi sur l\'eau (IOTA).',
-  },
-  biodiversite: {
-    color: '#065f46', fill: '#6ee7b7', swatch: '#10b981',
-    label: 'Biodiversite & Foret',
-    tooltip: 'Localise les zones Natura 2000 (ZSC, ZPS), les ZNIEFF type I et II, les réservoirs et corridors de la Trame Verte et Bleue, la forêt du massif vosgien et le Grand Site Ballon d\'Alsace. Déclenche l\'évaluation d\'incidences Natura 2000.',
-  },
-  risques: {
-    color: '#b91c1c', fill: '#fca5a5', swatch: '#ef4444',
-    label: 'Risques naturels & DDRM',
-    tooltip: 'Superpose les PPRi (inondation Savoureuse/Bourbeuse/Allaine), les zones de sismicité 2 et 3, l\'aléa retrait-gonflement des argiles, les zones de risque minier (mine de Giromagny), l\'aléa feux de forêt et le potentiel radon. Consulter avant tout PC.',
-  },
-  urbanisme: {
-    color: '#6d28d9', fill: '#ddd6fe', swatch: '#8b5cf6',
-    label: 'Urbanisme & Amenagement',
-    tooltip: 'Affiche les zonages PLU/PLUi (U, AU, A, N) des communes, les périmètres SCoT du Territoire de Belfort, les zones AU ouvertes à l\'urbanisation et les secteurs de projet. Indispensable pour vérifier la constructibilité d\'une parcelle.',
-  },
-  habitat: {
-    color: '#be185d', fill: '#f9a8d4', swatch: '#ec4899',
-    label: 'Habitat & Logement',
-    tooltip: 'Cartographie les Quartiers Prioritaires de la Ville (QPV), les secteurs d\'Action Cœur de Ville (Belfort), les programmes ANRU, le parc de logements sociaux et les friches urbaines inventoriées (portail BIGAN DDT 90).',
-  },
-  mobilite: {
-    color: '#c2410c', fill: '#fdba74', swatch: '#f97316',
-    label: 'Mobilites & Securite routiere',
-    tooltip: 'Représente le réseau routier avec les flux de trafic (TMJA), les axes à fort trafic (>20 000 veh/j), le classement sonore des voiries, les axes TCSP et vélo, et les points noirs d\'accidentalité. Utile pour les projets générateurs de trafic.',
-  },
-  patrimoine: {
-    color: '#78350f', fill: '#d97706', swatch: '#b45309',
-    label: 'Patrimoine & Archeologie',
-    tooltip: 'Matérialise les Monuments Historiques classés et inscrits avec leur périmètre de 500 m, les ZPPA (zones de présomption archéologique), les AVAP, les sites inscrits/classés et le périmètre Citadelle Vauban. Déclenche l\'avis ABF obligatoire.',
-  },
-};
 
-/* ════════════════════════════════════════════════════════════════════
-   SOUS-TYPES DE PROJETS
-   Chaque type de projet dispose de sous-types plus specifiques.
-   Ils affinent le menu de selection et conditionnent la checklist.
-   Structure : { ico, label, desc, cat (categorie reglementaire) }
-   ════════════════════════════════════════════════════════════════════ */
-var SOUS_TYPES = {
+/* URL patron WMTS Géoplateforme (sans clé, accès libre) */
+var GPF_WMTS = 'https://data.geopf.fr/wmts?' +
+  'SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+  '&STYLE=normal&TILEMATRIXSET=PM' +
+  '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}';
 
-  logement: [
-    { id:'maison',       ico:'&#x1F3E0;', label:'Maison individuelle',            desc:'Construction neuve d\'une maison individuelle ou de ses annexes (garage, piscine...)' },
-    { id:'lotissement',  ico:'&#x1F3D8;', label:'Lotissement / Division',          desc:'Division d\'un terrain en plusieurs lots constructibles' },
-    { id:'collectif',    ico:'&#x1F3E2;', label:'Immeuble collectif (logts)',      desc:'Batiment de plusieurs logements superposés (R+1 ou plus)' },
-    { id:'extension',    ico:'&#x1F4D0;', label:'Extension / Rehabilitation',   desc:'Agrandissement ou rehabilitation d\'une habitation existante' },
-    { id:'hlm',          ico:'&#x1F3E7;', label:'Logement social (HLM)',           desc:'Operation de logements locatifs sociaux (PLAI, PLUS, PLS)' },
-    { id:'residence',    ico:'&#x1F6CC;', label:'Residence services',              desc:'Residence etudiante, senior, tourisme, affaires' },
-    { id:'camping',      ico:'&#x26FA;',  label:'Camping / Hebergement touristique',  desc:'Creation ou extension d\'un terrain de camping ou de gites' },
-  ],
 
-  zae: [
-    { id:'artisanat',    ico:'&#x1F528;', label:'Artisanat / Atelier',             desc:'Atelier de production artisanale, garage, menuiserie...' },
-    { id:'commerce',     ico:'&#x1F6CD;', label:'Commerce de detail',           desc:'Supermarche, boutique, restaurant, cafe, hotel...' },
-    { id:'bureau',       ico:'&#x1F4BC;', label:'Bureau / Tertiaire',              desc:'Bureaux, cabinet medical, agence, coworking...' },
-    { id:'industrie',    ico:'&#x1F3ED;', label:'Site industriel / Entrepot',   desc:'Usine, entrepot logistique, plateforme de stockage' },
-    { id:'logistique',   ico:'&#x1F69A;', label:'Plateforme logistique',        desc:'Entrepot de distribution, hub logistique, transit' },
-    { id:'agricole_bat', ico:'&#x1F69C;', label:'Batiment agricole (hangar)',      desc:'Hangar agricole, silo, stabulation, serre' },
-    { id:'parc_act',     ico:'&#x1F5FA;', label:'Parc d\'activites (ZAE)',         desc:'Creation ou extension d\'une zone d\'activites economiques' },
-  ],
+/* ── SOUS-TYPES DE PROJETS
+   { id, ico, label, desc, cat } — affinent la sélection et la checklist */
 
-  equipement: [
-    { id:'ecole',        ico:'&#x1F4DA;', label:'Ecole / College / Lycee',     desc:'Etablissement d\'enseignement de la maternelle au lycee' },
-    { id:'sante',        ico:'&#x1F3E5;', label:'Etablissement de sante',       desc:'Hopital, clinique, maison de sante, EHPAD, creche...' },
-    { id:'sport',        ico:'&#x26BD;',  label:'Equipement sportif',           desc:'Gymnase, stade, piscine, salle polyvalente...' },
-    { id:'culture',      ico:'&#x1F3AD;', label:'Equipement culturel',          desc:'Mediatheque, cinema, salle de spectacle, musee...' },
-    { id:'culte',        ico:'&#x26EA;',  label:'Lieu de culte',                desc:'Eglise, mosquee, synagogue, temple, salle associative...' },
-    { id:'administratif',ico:'&#x1F3DB;', label:'Batiment administratif',       desc:'Mairie, tresorerie, commissariat, tribunal...' },
-    { id:'technique',    ico:'&#x2699;',  label:'Batiment technique',              desc:'Caserne pompiers, dechetterie, station epuration...' },
-    { id:'hebergement',  ico:'&#x1F6CF;', label:'Hebergement social',           desc:'CHRS, foyer de travailleurs, residence sociale...' },
-  ],
 
-  energie: [
-    { id:'pv_toiture',   ico:'&#x2600;',  label:'Panneaux PV sur toiture',      desc:'Installation photovoltaique sur batiment existant ou neuf' },
-    { id:'pv_sol',       ico:'&#x1F315;', label:'Centrale PV au sol',           desc:'Centrale solaire au sol, agrivoltaisme' },
-    { id:'eolien',       ico:'&#x1F32C;', label:'Parc eolien',                  desc:'Installation d\'eoliennes terrestres' },
-    { id:'biomasse',     ico:'&#x1F332;', label:'Chaufferie biomasse',          desc:'Chaufferie bois, methanisation, reseau de chaleur' },
-    { id:'hydrogene',    ico:'&#x1F4A7;', label:'Installation hydrogene',       desc:'Electrolyse, stockage, distribution d\'hydrogene vert' },
-    { id:'stockage',     ico:'&#x1F50B;', label:'Stockage energie (batterie)',  desc:'Station de stockage par batteries ou autre vecteur' },
-    { id:'step',         ico:'&#x1F30A;', label:'Station hydroelectrique',        desc:'Microcentrale sur cours d\'eau, barrage' },
-    { id:'ombriere',     ico:'&#x1F697;', label:'Ombriere PV (parking)',        desc:'Ombriere photovoltaique sur parc de stationnement (loi APER)' },
-  ],
+/* ── CHECKLISTS ADMINISTRATIVES
+   Étapes réglementaires par sous-type. { id, ico, label, desc, delai, oblig } */
 
-  transport: [
-    { id:'voirie',       ico:'&#x1F6E3;', label:'Voirie communale / RD',        desc:'Creation ou modification d\'une voie publique' },
-    { id:'parking',      ico:'&#x1F17F;', label:'Parc de stationnement',        desc:'Creation d\'un parking, aire de retournement...' },
-    { id:'piste_velo',   ico:'&#x1F6B2;', label:'Piste / Voie cyclable',        desc:'Piste cyclable, voie verte, coulée verte' },
-    { id:'gare',         ico:'&#x1F686;', label:'Gare / Pole d\'echanges',      desc:'Gare ferroviaire, routiere, pole multimodal' },
-    { id:'pont',         ico:'&#x1F309;', label:'Ouvrage d\'art (pont)',         desc:'Construction ou rehabilitation d\'un pont ou passerelle' },
-    { id:'giratoire',    ico:'&#x1F503;', label:'Giratoire / Carrefour',           desc:'Amenagement d\'un carrefour ou d\'un giratoire' },
-  ],
 
-  agriculture: [
-    { id:'elevage',      ico:'&#x1F404;', label:'Elevage (bovin, ovin...)',      desc:'Batiment d\'elevage, fumiere, stabulation, silo fourrager' },
-    { id:'maraichage',   ico:'&#x1F955;', label:'Maraichage / Horticulture',       desc:'Serre maraichere, abris de culture, serre horticole' },
-    { id:'cereales',     ico:'&#x1F33E;', label:'Grandes cultures (cereales)',    desc:'Exploitation cerealiere, oleagineux, proteagineux' },
-    { id:'vente_directe',ico:'&#x1F371;', label:'Vente directe / Circuit court',  desc:'Magasin a la ferme, marche de producteurs, drive fermier' },
-    { id:'bio',          ico:'&#x1F343;', label:'Agriculture biologique',       desc:'Conversion ou maintien en agriculture biologique' },
-    { id:'agrivoltaisme',ico:'&#x2600;',  label:'Agrivoltaisme',                desc:'Association production agricole et photovoltaique' },
-    { id:'irrigation',   ico:'&#x1F4A7;', label:'Irrigation / Retenue eau',     desc:'Forage, pompage, retenue collinaire, bassine' },
-  ],
+/* ── COUCHES_DATA — GeoJSON embarqué (11 couches Atlas DDT 90)
+   Fallback si IGN indisponible. agriculture/cadastre : IGN-only (pas de fallback). */
 
-  nature: [
-    { id:'parc_urbain',  ico:'&#x1F33B;', label:'Parc / Jardin public',         desc:'Creation ou requalification d\'un espace vert public' },
-    { id:'renaturation', ico:'&#x1F331;', label:'Renaturation / Desimpermeabilisation',  desc:'Suppression de surfaces impermeabilisees, creation de noues' },
-    { id:'foret',        ico:'&#x1F332;', label:'Boisement / Reboisement',        desc:'Plantation forestiere, reboisement apres coupe rase' },
-    { id:'zh_restauration',ico:'&#x1F986;',label:'Restauration zone humide',     desc:'Renaturalisation d\'une zone humide degradee' },
-    { id:'cours_eau',    ico:'&#x1F30A;', label:'Restauration cours d\'eau',     desc:'Effacement d\'ouvrage, renaturation du lit, restauration' },
-    { id:'piste_nature', ico:'&#x1F97E;', label:'Sentier / Chemin de randonnee',   desc:'Creation ou balisage d\'un sentier de randonnee ou de VTT' },
-  ],
-
-  friche: [
-    { id:'friche_ind',   ico:'&#x1F3ED;', label:'Friche industrielle',          desc:'Ancienne usine, site minier, site chimique...' },
-    { id:'friche_comm',  ico:'&#x1F6CD;', label:'Friche commerciale',              desc:'Ancien centre commercial, hypermarche, galerie...' },
-    { id:'friche_mil',   ico:'&#x1F6E1;', label:'Friche militaire',             desc:'Ancienne base militaire, caserne, zone de defense' },
-    { id:'friche_agri',  ico:'&#x1F33E;', label:'Friche agricole',              desc:'Anciens batiments agricoles abandonnes' },
-    { id:'friche_fer',   ico:'&#x1F686;', label:'Friche ferroviaire',              desc:'Ancienne gare, voie ferree desaffectee, faisceau de triage' },
-    { id:'renat_friche', ico:'&#x1F331;', label:'Renaturation de friche',          desc:'Conversion d\'une friche en espace vert ou naturel' },
-  ],
-};
-
-/* ════════════════════════════════════════════════════════════════════
-   CHECKLISTS ADMINISTRATIVES
-   Chaque sous-type possede sa propre checklist d\'etapes.
-   Structure de chaque etape :
-     { id, phase (avant/instruction/travaux/reception/post),
-       label, desc, delai, obligatoire, lien }
-   ════════════════════════════════════════════════════════════════════ */
-var CHECKLISTS = {
-
-  /* ── MAISON INDIVIDUELLE ──────────────────────────────────────── */
-  maison: [
-    { id:'mi1',  phase:'avant',       ico:'&#x1F50D;', label:'Verification du PLU / zonage',              delai:'Avant tout projet',    oblig:true,  desc:'Consulter le document d\'urbanisme de la commune : zone UA, UB, UC, A, N... Verifier le reglement de zone applicable.' },
-    { id:'mi2',  phase:'avant',       ico:'&#x26A0;',  label:'Consultation du risque radon',              delai:'Avant achat du terrain', oblig:false, desc:'Verifier si la commune est en zone a potentiel radon. Prevoir une membrane anti-radon en construction.' },
-    { id:'mi3',  phase:'avant',       ico:'&#x1F30A;', label:'Verification risques naturels (PPRi, argiles)', delai:'Avant achat', oblig:true, desc:'Consulter le DDRM, le PPRi et la cartographie retrait-gonflement des argiles (BRGM). Verifier si une etude geotechnique G1+G2 est obligatoire.' },
-    { id:'mi4',  phase:'avant',       ico:'&#x1F4CF;', label:'Bornage du terrain (geometre)',             delai:'Avant PC',             oblig:true,  desc:'Faire realiser un bornage contradictoire par un geometre-expert pour fixer les limites de la propriete.' },
-    { id:'mi5',  phase:'avant',       ico:'&#x1F4BB;', label:'Etude geotechnique G1 (si argiles)',        delai:'Avant PC',             oblig:false, desc:'Obligatoire si le terrain est en zone d\'exposition argiles moyenne ou forte (loi ELAN 2018). Commandez aupres d\'un bureau geotechnique.' },
-    { id:'mi6',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot du Permis de Construire (PC)',        delai:'J0',                   oblig:true,  desc:'Depot en mairie ou sur le portail Geozone. Dossier : CERFA 13406, plan de situation, plan masse, coupes, facades, insertion paysagere, notice.' },
-    { id:'mi7',  phase:'instruction', ico:'&#x1F4C5;', label:'Instruction du dossier (2 mois)',           delai:'J0 + 2 mois',          oblig:true,  desc:'Delai de droit commun : 2 mois. Porte a 3 mois en secteur protege (Natura 2000, ABF). Silence vaut accord a l\'expiration du delai.' },
-    { id:'mi8',  phase:'instruction', ico:'&#x1F4DE;', label:'Consultation ABF si perimetre MH',         delai:'Dans l\'instruction',  oblig:false, desc:'Si le projet est dans le perimetre de 500m d\'un MH, l\'ABF (UDAP 90) donne un avis conforme : son accord est obligatoire.' },
-    { id:'mi9',  phase:'instruction', ico:'&#x1F6A7;', label:'Affichage PC en mairie et sur le terrain', delai:'Des la delivrance',     oblig:true,  desc:'Le PC doit etre affiche sur le terrain de facon visible depuis la voie publique pendant toute la duree des travaux.' },
-    { id:'mi10', phase:'instruction', ico:'&#x23F3;',  label:'Delai de recours des tiers (2 mois)',      delai:'Apres affichage',       oblig:true,  desc:'Les tiers ont 2 mois a compter de l\'affichage sur le terrain pour contester le PC. Attendre avant de commencer les travaux.' },
-    { id:'mi11', phase:'travaux',     ico:'&#x1F6A7;', label:'Declaration d\'ouverture de chantier (DOC)', delai:'Avant 1ers travaux', oblig:true,  desc:'Deposer le formulaire CERFA 13407 en mairie avant le commencement des travaux.' },
-    { id:'mi12', phase:'travaux',     ico:'&#x1F3D7;', label:'Respect des prescriptions architecturales', delai:'Pendant travaux',     oblig:true,  desc:'Respecter les conditions posees dans le PC : materiaux, couleurs, implantation, hauteur, distances aux limites.' },
-    { id:'mi13', phase:'travaux',     ico:'&#x1F4A7;', label:'Raccordements reseaux (eau, elec, ANC)',   delai:'Pendant travaux',      oblig:true,  desc:'Contacter le gestionnaire de reseaux (Enedis, operateur eau) pour les raccordements. ANC si pas de reseau collectif.' },
-    { id:'mi14', phase:'reception',   ico:'&#x1F4DD;', label:'Declaration attestant l\'achevement (DAACT)', delai:'Fin chantier',     oblig:true,  desc:'Deposer le formulaire CERFA 13408 dans les 90 jours suivant l\'achevement des travaux.' },
-    { id:'mi15', phase:'post',        ico:'&#x2705;',  label:'Visite de conformite possible',            delai:'Dans les 3 mois',      oblig:false, desc:'La mairie peut venir verifier la conformite des travaux avec le PC dans les 3 mois suivant la DAACT.' },
-    { id:'mi16', phase:'post',        ico:'&#x1F3E0;', label:'Taxe d\'amenagement (TA)',                 delai:'Apres DAACT',          oblig:true,  desc:'Reglement de la taxe d\'amenagement aupres de la DDT (si superficie > 5 m2 de surface taxable). Comprend la part communale et departementale.' },
-  ],
-
-  /* ── LOTISSEMENT ─────────────────────────────────────────────── */
-  lotissement: [
-    { id:'lt1',  phase:'avant',       ico:'&#x1F50D;', label:'Faisabilite fonciere et PLU',              delai:'En amont',             oblig:true,  desc:'Verifier la zone du PLU, la surface minimale des lots, le COS eventuel, les regles de division parcellaire.' },
-    { id:'lt2',  phase:'avant',       ico:'&#x1F4CF;', label:'Geometre : plan de division et bornage',  delai:'Avant PA',             oblig:true,  desc:'Faire realiser un plan topographique et un plan de division par un geometre-expert.' },
-    { id:'lt3',  phase:'avant',       ico:'&#x1F4BB;', label:'Etude d\'impact (si >50 lots)',            delai:'Avant PA',             oblig:false, desc:'Obligatoire si le lotissement cree plus de 50 lots ou depasse 5 ha. A faire realiser par un bureau d\'etudes environnemental.' },
-    { id:'lt4',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot du Permis d\'Amenager (PA)',         delai:'J0',                   oblig:true,  desc:'CERFA 13409. Dossier : plan de situation, notice, plan d\'amenagement, reglement (si applicable), etude d\'impact si requise.' },
-    { id:'lt5',  phase:'instruction', ico:'&#x1F4C5;', label:'Instruction PA (3 mois)',                  delai:'J0 + 3 mois',          oblig:true,  desc:'Delai standard 3 mois pour un PA. Consultations : DDT, ABF si perimetre MH, SDIS, gestionnaires de reseaux.' },
-    { id:'lt6',  phase:'instruction', ico:'&#x1F4CB;', label:'Cahier des Charges de Cession (CCC)',     delai:'Avant commercialisation', oblig:false, desc:'Document contractuel encadrant les modalites de cession des lots. Obligatoire si le lotissement comporte plus de 5 lots avec espaces communs.' },
-    { id:'lt7',  phase:'travaux',     ico:'&#x1F6A7;', label:'VRD (viabilisation lots)',                delai:'Avant vente',           oblig:true,  desc:'Realisation des voiries, reseaux divers (eau, electricite, assainissement, telecom) avant la commercialisation des lots.' },
-    { id:'lt8',  phase:'reception',   ico:'&#x1F4DD;', label:'DAACT + conformite des VRD',              delai:'Fin travaux',           oblig:true,  desc:'Certification de l\'achevement des VRD. Les lots peuvent etre vendus des la delivrance du PA si garantie d\'achevement.' },
-    { id:'lt9',  phase:'post',        ico:'&#x1F4C4;', label:'PC pour chaque lot',                      delai:'Par acquereur',         oblig:true,  desc:'Chaque acquereur doit deposer un PC conforme au reglement du lotissement avant de construire.' },
-  ],
-
-  /* ── IMMEUBLE COLLECTIF ──────────────────────────────────────── */
-  collectif: [
-    { id:'ic1',  phase:'avant',       ico:'&#x1F50D;', label:'Etude de faisabilite et programme',       delai:'En amont',             oblig:true,  desc:'Etude de marche, programme de logements (surface, typologies, loyers), etude de sol, analyse du PLU.' },
-    { id:'ic2',  phase:'avant',       ico:'&#x1F4C4;', label:'Consultation architectes (concours)',     delai:'Avant PC',             oblig:false, desc:'Obligatoire pour les maitres d\'ouvrage publics (> seuil UE). Facultatif pour les promoteurs prives.' },
-    { id:'ic3',  phase:'avant',       ico:'&#x1F333;', label:'Etude impact si >40 000 m2 SDP',         delai:'Avant PC',             oblig:false, desc:'L\'etude d\'impact est requise au-dela de certains seuils. Se renseigner aupres de la DDT 90.' },
-    { id:'ic4',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot PC (CERFA 13406)',                  delai:'J0',                   oblig:true,  desc:'Dossier complet : plans, coupes, facades, notice RE2020, etude geotechnique, etude insertion paysagere.' },
-    { id:'ic5',  phase:'instruction', ico:'&#x1F4C5;', label:'Instruction PC (3 mois + 1 si ERP)',      delai:'J0 + 3 mois',          oblig:true,  desc:'3 mois pour un batiment d\'habitation collectif. Commission de securite et accessibilite si ERP en RDC.' },
-    { id:'ic6',  phase:'instruction', ico:'&#x2665;',  label:'Loi SRU : 25% logements sociaux',        delai:'Avant PC',             oblig:false, desc:'Si la commune est soumise a la loi SRU : 25% de logements sociaux obligatoires dans les operations de plus de 12 logements.' },
-    { id:'ic7',  phase:'travaux',     ico:'&#x1F6A7;', label:'DOC + affichage chantier',               delai:'Avant 1ers travaux',   oblig:true,  desc:'Declaration d\'ouverture de chantier CERFA 13407. Panneaux de chantier reglementaires.' },
-    { id:'ic8',  phase:'travaux',     ico:'&#x1F3E0;', label:'Conformite RE2020',                      delai:'Pendant travaux',       oblig:true,  desc:'Respecter les exigences de la RE2020 : seuil carbone, seuil energie primaire, confort d\'ete.' },
-    { id:'ic9',  phase:'reception',   ico:'&#x1F4DD;', label:'DAACT + achevement',                     delai:'Fin chantier',          oblig:true,  desc:'DAACT dans les 90 jours. Verifier la conformite avant livraison.' },
-    { id:'ic10', phase:'post',        ico:'&#x1F4B0;', label:'Taxe d\'amenagement',                    delai:'Apres DAACT',           oblig:true,  desc:'Calcul de la TA sur les surfaces creees. La DDT 90 emet le titre de perception.' },
-  ],
-
-  /* ── COMMERCE ────────────────────────────────────────────────── */
-  commerce: [
-    { id:'co1',  phase:'avant',       ico:'&#x1F50D;', label:'Verification du PLU (zone UX, UA...)',   delai:'En amont',             oblig:true,  desc:'Les commerces sont autorises en zones urbaines mixtes (UA, UB). Verifier les dispositions du reglement de zone.' },
-    { id:'co2',  phase:'avant',       ico:'&#x1F6CD;', label:'Autorisation CDAC si >1000 m2',          delai:'Avant PC',             oblig:false, desc:'Toute creation de surface commerciale > 1000 m2 necessite l\'autorisation de la Commission Departementale d\'Amenagement Commercial (CDAC).' },
-    { id:'co3',  phase:'avant',       ico:'&#x267F;',  label:'Etude accessibilite PMR',                delai:'Avant PC',             oblig:true,  desc:'Les ERP sont soumis a l\'accessibilite universelle. Faire realiser un diagnostic accessibilite par un bureau specialise.' },
-    { id:'co4',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot PC (si > 20 m2 SP)',               delai:'J0',                   oblig:true,  desc:'PC obligatoire pour toute construction nouvelle de plus de 20 m2 de surface de plancher. DP si < 20 m2.' },
-    { id:'co5',  phase:'instruction', ico:'&#x1F691;', label:'Consultation SDIS (securite incendie)',  delai:'Dans instruction',     oblig:true,  desc:'Le SDIS est consulte pour les ERP. Regles de securite : degagement, compartimentage, alarme, extincteurs.' },
-    { id:'co6',  phase:'travaux',     ico:'&#x1F6A7;', label:'DOC + chantier',                        delai:'Avant 1ers travaux',   oblig:true,  desc:'Declaration d\'ouverture de chantier. Respect des conditions du PC (facades, enseigne, accessibilite).' },
-    { id:'co7',  phase:'reception',   ico:'&#x1F4DD;', label:'Visite commission securite ERP',        delai:'Avant ouverture',       oblig:true,  desc:'Obligatoire avant l\'ouverture au public pour les ERP de 1ere a 4eme categorie. Obtenir l\'avis favorable.' },
-    { id:'co8',  phase:'post',        ico:'&#x1F4DC;', label:'Declaration d\'activite (CFE, etc.)',    delai:'Avant ouverture',       oblig:true,  desc:'Immatriculation au RCS ou repertoire des metiers selon l\'activite. Declaration au Centre de Formalites des Entreprises.' },
-  ],
-
-  /* ── BUREAU / TERTIAIRE ──────────────────────────────────────── */
-  bureau: [
-    { id:'bu1',  phase:'avant',       ico:'&#x1F50D;', label:'Verification PLU et zonage',             delai:'En amont',             oblig:true,  desc:'Les bureaux sont autorises en zones UA, UB, UX selon le PLU. Verifier les coefficients et les destinations autorisees.' },
-    { id:'bu2',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot PC ou DP selon surface',           delai:'J0',                   oblig:true,  desc:'DP si < 20 m2 de SP. PC si > 20 m2. Dossier complet avec justificatif RE2020 pour les surfaces > 1000 m2.' },
-    { id:'bu3',  phase:'instruction', ico:'&#x1F4BB;', label:'Decret BACS si > 290 kW',               delai:'Dans instruction',     oblig:false, desc:'Automatisation des systemes energetiques obligatoire pour les batiments tertiaires > 290 kW (decret BACS 2021).' },
-    { id:'bu4',  phase:'travaux',     ico:'&#x2699;',  label:'Respect RE2020 et decret tertiaire',    delai:'Pendant travaux',       oblig:true,  desc:'RE2020 pour les constructions neuves. Decret tertiaire pour les batiments > 1000 m2 : -40% conso en 2030.' },
-    { id:'bu5',  phase:'reception',   ico:'&#x1F4DD;', label:'DAACT + mise en conformite',            delai:'Fin chantier',          oblig:true,  desc:'DAACT dans les 90 jours. Verifier la conformite avant occupation.' },
-  ],
-
-  /* ── INDUSTRIE / ENTREPOT ─────────────────────────────────────── */
-  industrie: [
-    { id:'in1',  phase:'avant',       ico:'&#x1F50D;', label:'Verification zonage PLU (UX, AU)',       delai:'En amont',             oblig:true,  desc:'Zones UX ou AUx pour les activites industrielles. Verifier les nuisances tolerees selon le reglement de zone.' },
-    { id:'in2',  phase:'avant',       ico:'&#x2623;',  label:'Diagnostic BASIAS/BASOL si friche',     delai:'Avant achat',           oblig:false, desc:'Si le site est une ancienne friche industrielle, consulter BASIAS et BASOL. Realiser une ESE Phase 1.' },
-    { id:'in3',  phase:'avant',       ico:'&#x1F4BB;', label:'Classement ICPE (si activite classee)', delai:'Avant PC',             oblig:false, desc:'Verifier si l\'activite est soumise a la reglementation ICPE (rubrique de nomenclature). 3 regimes : declaration, enregistrement, autorisation.' },
-    { id:'in4',  phase:'avant',       ico:'&#x1F333;', label:'Etude d\'impact si ICPE autorisation',  delai:'Avant instruction',    oblig:false, desc:'Obligatoire pour les ICPE en regime d\'autorisation. A faire realiser par un bureau d\'etudes agree.' },
-    { id:'in5',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot PC + ICPE si requis',             delai:'J0',                   oblig:true,  desc:'PC pour la partie construction. Dossier ICPE parallele si activite classee. Les deux instructions sont liees.' },
-    { id:'in6',  phase:'instruction', ico:'&#x23F3;',  label:'Enquete publique ICPE autorisation',    delai:'J0 + 4 a 6 mois',      oblig:false, desc:'Obligatoire pour les ICPE en regime d\'autorisation. Organisation par le prefet apres le depot du dossier.' },
-    { id:'in7',  phase:'travaux',     ico:'&#x1F6A7;', label:'DOC + conformite ICPE',                 delai:'Avant 1ers travaux',   oblig:true,  desc:'DOC pour les travaux. L\'exploitant doit notifier le debut d\'exploitation a l\'inspection des ICPE.' },
-    { id:'in8',  phase:'post',        ico:'&#x1F4CB;', label:'Suivi inspection ICPE',                 delai:'En continu',            oblig:false, desc:'Les ICPE sont soumises a des inspections regulieres. Tenir un registre des contr-les et des incidents.' },
-  ],
-
-  /* ── PARC PV AU SOL ──────────────────────────────────────────── */
-  pv_sol: [
-    { id:'pv1',  phase:'avant',       ico:'&#x1F50D;', label:'Faisabilite : zonage, contraintes',      delai:'En amont',             oblig:true,  desc:'Verifier le zonage PLU (zone A ou N en general), les contraintes Natura 2000, ZNIEFF, covisibilite MH, potentiel PV (Atlas C22).' },
-    { id:'pv2',  phase:'avant',       ico:'&#x1F333;', label:'Inventaires naturalistes (4 saisons)',   delai:'Avant PC',             oblig:true,  desc:'Avifaune, chiropteres, flore, insectes, reptiles. Minimum 4 saisons de prospection. Bureau d\'etudes naturaliste agree.' },
-    { id:'pv3',  phase:'avant',       ico:'&#x1F4BB;', label:'Evaluation incidences Natura 2000',     delai:'Avant PC',             oblig:false, desc:'Obligatoire si le projet peut affecter un site Natura 2000. La DDT 90 guide la procedure.' },
-    { id:'pv4',  phase:'avant',       ico:'&#x2600;',  label:'Dossier de raccordement Enedis/RTE',    delai:'Avant PC',             oblig:true,  desc:'Contacter Enedis ou RTE selon la puissance pour obtenir une proposition de raccordement (PTF). Duree : 3 a 6 mois.' },
-    { id:'pv5',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot PC (CERFA 13406)',                delai:'J0',                   oblig:true,  desc:'Dossier complet avec etude paysagere, etude d\'impact si > 5 ha, etude ecologique, notice ICPE si applicable.' },
-    { id:'pv6',  phase:'instruction', ico:'&#x23F3;',  label:'Instruction PC + avis DREAL',           delai:'J0 + 3 a 5 mois',      oblig:true,  desc:'Avis de la DREAL, de l\'UDAP (si covisibilite MH), du gestionnaire reseau. Possible enquete publique > 250 kWc.' },
-    { id:'pv7',  phase:'instruction', ico:'&#x1F4B0;', label:'Appel d\'offres CRE si > 500 kWc',     delai:'Avant construction',   oblig:false, desc:'Pour les projets > 500 kWc, depot d\'une offre dans le cadre des appels d\'offres de la Commission de Regulation de l\'Energie.' },
-    { id:'pv8',  phase:'travaux',     ico:'&#x1F6A7;', label:'DOC + suivi chantier (naturaliste)',    delai:'Avant 1ers travaux',   oblig:true,  desc:'DOC. Suivi de chantier par un naturaliste pour eviter l\'impact sur les especes protegees.' },
-    { id:'pv9',  phase:'post',        ico:'&#x1F331;', label:'Mesures ERC : suivi / compensation',    delai:'Post-chantier',         oblig:false, desc:'Si des mesures compensatoires ont ete imposees (especes, zones humides), en assurer le suivi annuel.' },
-    { id:'pv10', phase:'post',        ico:'&#x1F504;', label:'Remise en etat apres exploitation',    delai:'Fin de vie 25-30 ans',  oblig:true,  desc:'L\'exploitant doit provisionner et realiser le demantelement et la remise en etat du site a la fin de vie de la centrale.' },
-  ],
-
-  /* ── PARC EOLIEN ─────────────────────────────────────────────── */
-  eolien: [
-    { id:'eo1',  phase:'avant',       ico:'&#x1F50D;', label:'Zone de Developpement de l\'Eolien (ZDE)', delai:'En amont',         oblig:false, desc:'Verifier les documents de planification energetique (SRADDET, SCoT). Zones favorables cartographiees dans l\'Atlas DDT 90 (C24).' },
-    { id:'eo2',  phase:'avant',       ico:'&#x1F3D9;', label:'Etude de vent (minimum 1 an)',           delai:'Avant depot',           oblig:true,  desc:'Installation d\'un mat de mesure pendant au moins 12 mois pour caracteriser le gisement eolien.' },
-    { id:'eo3',  phase:'avant',       ico:'&#x1F333;', label:'Inventaires naturalistes (4 saisons)',   delai:'Avant depot',           oblig:true,  desc:'Avifaune, chiropteres minimum 4 saisons. Expertise naturaliste approfondie necessaire.' },
-    { id:'eo4',  phase:'avant',       ico:'&#x1F4BB;', label:'Etudes acoustique et visuelle',         delai:'Avant depot',           oblig:true,  desc:'Etude d\'impact acoustique (emergence maximale 3 dB(A) de nuit) et etude paysagere avec photomontages.' },
-    { id:'eo5',  phase:'avant',       ico:'&#x1F4E1;', label:'Servitudes aeronautiques et radars',    delai:'Avant depot',           oblig:true,  desc:'Consultation de la DGAC, de la DGA, de Meteo-France. Les servitudes peuvent interdire ou contraindre les hauteurs.' },
-    { id:'eo6',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot dossier ICPE Autorisation',       delai:'J0',                   oblig:true,  desc:'Les eoliennes sont des ICPE soumises a autorisation (regime unique). Dossier + etude d\'impact + etude de danger.' },
-    { id:'eo7',  phase:'instruction', ico:'&#x23F3;',  label:'Enquete publique (3 mois)',             delai:'J0 + 6 a 12 mois',     oblig:true,  desc:'Enquete publique organisee par le prefet apres avis du commissaire enqueteur. Recours frequents en contentieux.' },
-    { id:'eo8',  phase:'instruction', ico:'&#x1F4B0;', label:'Appel d\'offres CRE (si tarif S17)',    delai:'Avant construction',   oblig:false, desc:'Pour les projets > 18 MW en 2025, obligation de participer aux appels d\'offres de la CRE pour obtenir un contrat de soutien.' },
-    { id:'eo9',  phase:'travaux',     ico:'&#x1F6A7;', label:'Bridage chantier (chiropteres, avifaune)', delai:'Pendant travaux',  oblig:true,  desc:'Arret des travaux lors des periodes de migration ou de reproduction sensibles selon le calendrier naturaliste.' },
-    { id:'eo10', phase:'post',        ico:'&#x1F9E0;', label:'Suivi environnemental annuel',          delai:'Annuel (5 ans)',        oblig:true,  desc:'Suivi de la mortalite avifaune et chiropteres. Bridage operationnel si depassement des seuils.' },
-  ],
-
-  /* ── ECOLE ────────────────────────────────────────────────────── */
-  ecole: [
-    { id:'ec1',  phase:'avant',       ico:'&#x1F465;', label:'Etude de besoins demographiques',       delai:'En amont',             oblig:true,  desc:'Estimer la population scolaire sur 10 ans. Calibrer le projet : nombre de classes, services (garderie, cantine, gymnase).' },
-    { id:'ec2',  phase:'avant',       ico:'&#x267F;',  label:'Programme architectural + accessibilite', delai:'Avant PC',          oblig:true,  desc:'Programme fonctionnel : surfaces, flux, materiaux. Accessibilite universelle (loi 2005) obligatoire.' },
-    { id:'ec3',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot PC (ERP IVe cat. ou +)',           delai:'J0',                  oblig:true,  desc:'Dossier complet avec notice accessibilite, notice securite incendie, etude thermique RE2020.' },
-    { id:'ec4',  phase:'instruction', ico:'&#x1F4DE;', label:'Avis Inspection Academique',            delai:'Dans instruction',     oblig:true,  desc:'L\'Inspection Academique est consultee pour valider le programme et le calendrier de livraison.' },
-    { id:'ec5',  phase:'instruction', ico:'&#x1F691;', label:'Avis SDIS (securite incendie ERP)',     delai:'Dans instruction',     oblig:true,  desc:'Le SDIS valide les conditions de securite incendie : degagement, desenfumage, alarme, acces pompiers.' },
-    { id:'ec6',  phase:'travaux',     ico:'&#x1F6A7;', label:'DOC + suivi de chantier',               delai:'Avant 1ers travaux',   oblig:true,  desc:'DOC en mairie. Mise en place du bureau de controle et du coordinateur SPS (securite et protection de la sante).' },
-    { id:'ec7',  phase:'reception',   ico:'&#x1F4CB;', label:'Visite commission securite ERP',        delai:'Avant ouverture',       oblig:true,  desc:'Commission de securite composee de la mairie, SDIS et services de l\'Etat. Avis favorable obligatoire avant ouverture.' },
-    { id:'ec8',  phase:'post',        ico:'&#x2705;',  label:'Visite periodique commission securite', delai:'Tous les 5 ans',        oblig:true,  desc:'Visite periodique de la commission de securite tous les 5 ans pour les ERP de 1ere a 4eme categorie.' },
-  ],
-
-  /* ── FRICHE INDUSTRIELLE ─────────────────────────────────────── */
-  friche_ind: [
-    { id:'fi1',  phase:'avant',       ico:'&#x2623;',  label:'Consultation BASIAS / BASOL',           delai:'Avant tout projet',    oblig:true,  desc:'Verifier si le site figure dans les inventaires nationaux des sites industriels et sols pollues. Acces gratuit en ligne.' },
-    { id:'fi2',  phase:'avant',       ico:'&#x1F50D;', label:'Etude historique Phase 1 (ESE)',         delai:'Avant achat',           oblig:true,  desc:'Etude historique et documentaire, visite de terrain, identification des sources de pollution potentielles. Par un bureau agree.' },
-    { id:'fi3',  phase:'avant',       ico:'&#x1F9EA;', label:'Campagne Phase 2 si risque identifie',  delai:'Apres Phase 1',         oblig:false, desc:'Prelevements sols et eaux souterraines, analyses en laboratoire, quantification de la pollution. Definit l\'usage compatible.' },
-    { id:'fi4',  phase:'avant',       ico:'&#x1F4B0;', label:'Candidature Fonds Friches ADEME',       delai:'Avant travaux',         oblig:false, desc:'Deposer un dossier aupres de l\'ADEME (portail AGIR) pour obtenir une aide au financement de la depollution et de la rehabilitation.' },
-    { id:'fi5',  phase:'avant',       ico:'&#x1F3E0;', label:'Consultation EPF BFC pour portage',     delai:'Avant achat',           oblig:false, desc:'L\'EPF BFC peut porter le foncier pendant l\'etude et la depollution. Contacter en amont pour evaluer la faisabilite.' },
-    { id:'fi6',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot PC selon usage futur',            delai:'J0',                   oblig:true,  desc:'PC selon l\'usage futur du site (logements, ZAE, equipement...). Le plan de gestion definit les conditions de constructibilite.' },
-    { id:'fi7',  phase:'instruction', ico:'&#x1F4CB;', label:'Plan de gestion (si pollution)',        delai:'Avant travaux',         oblig:false, desc:'Document contractuel entre l\'exploitant ou le proprietaire et l\'administration, definissant les mesures de gestion des sols.' },
-    { id:'fi8',  phase:'travaux',     ico:'&#x1F6A7;', label:'Suivi pollution pendant terrassements', delai:'Pendant travaux',       oblig:false, desc:'Surveillance de la qualite de l\'air et des eaux souterraines pendant les travaux de terrassement. Gestion des terres excavees.' },
-    { id:'fi9',  phase:'post',        ico:'&#x1F4CA;', label:'Attestation de conformite (certificat)', delai:'Fin chantier',         oblig:false, desc:'Si prevue dans le plan de gestion : attestation d\'un bureau certifie que les travaux ont ete realises conformement au plan.' },
-    { id:'fi10', phase:'post',        ico:'&#x1F331;', label:'Renaturation si applicable',            delai:'Apres travaux',         oblig:false, desc:'Desimpermeabilisation, vegetalisation, gestion des eaux pluviales a la source. Eligible aux aides Fonds vert.' },
-  ],
-
-  /* ── VOIRIE ──────────────────────────────────────────────────── */
-  voirie: [
-    { id:'vo1',  phase:'avant',       ico:'&#x1F50D;', label:'Etude de trafic et de faisabilite',     delai:'En amont',             oblig:true,  desc:'Comptages trafic, etude de capacite, analyse de securite. Dimensionnement de la voirie selon le type et le trafic prevu.' },
-    { id:'vo2',  phase:'avant',       ico:'&#x1F4BB;', label:'Etude d\'impact si RD ou echangeur',    delai:'Avant instruction',    oblig:false, desc:'Requise pour les routes departementales importantes et les echangeurs autoroutiers. Procedure du CGPPP.' },
-    { id:'vo3',  phase:'avant',       ico:'&#x1F30A;', label:'Etude hydraulique si traverse de cours d\'eau', delai:'Avant DT',   oblig:false, desc:'Si la voirie franchit un cours d\'eau : dossier loi sur l\'eau (IOTA). Peut necessite une autorisation prefectorale.' },
-    { id:'vo4',  phase:'instruction', ico:'&#x1F4C4;', label:'Declaration de Travaux (DT) ou DUP',    delai:'J0',                  oblig:true,  desc:'Declaration de Travaux si voirie communale. Declaration d\'Utilite Publique (DUP) si expropriation necessaire (> 3 mois).' },
-    { id:'vo5',  phase:'instruction', ico:'&#x1F4BB;', label:'Consultation des concessionnaires',     delai:'Dans instruction',     oblig:true,  desc:'Informer les gestionnaires de reseaux enterres (eau, electricite, telecom, gaz) par DT/DICT avant tout terrassement.' },
-    { id:'vo6',  phase:'travaux',     ico:'&#x1F6A7;', label:'DICT (Declaration Intention Commencement)', delai:'Avant travaux',   oblig:true,  desc:'3 jours avant tout chantier : envoyer la DICT aux concessionnaires de reseaux. Reponse dans les 9 jours.' },
-    { id:'vo7',  phase:'reception',   ico:'&#x2705;',  label:'Reception des travaux et classement',   delai:'Fin chantier',          oblig:true,  desc:'PV de reception des travaux. Classement dans le domaine public communal par deliberation du conseil municipal.' },
-  ],
-
-  /* ── RENATURATION ────────────────────────────────────────────── */
-  renaturation: [
-    { id:'rn1',  phase:'avant',       ico:'&#x1F333;', label:'Etude de faisabilite ecologique',       delai:'En amont',             oblig:false, desc:'Diagnostic de l\'etat initial du site, potentiel de renaturation, especes a favoriser, contraintes foncières.' },
-    { id:'rn2',  phase:'avant',       ico:'&#x1F4B0;', label:'Eligibilite Fonds vert / ADEME',       delai:'Avant travaux',         oblig:false, desc:'La renaturation est eligible aux aides du Fonds vert (volet cadre de vie) et des programmes ADEME. Deposer un dossier.' },
-    { id:'rn3',  phase:'instruction', ico:'&#x1F4C4;', label:'DP ou PC selon les amenagements',      delai:'J0',                   oblig:false, desc:'DP pour les amenagements legers. PC si construction de kiosques, abris, WC. Aucune autorisation si simple plantation.' },
-    { id:'rn4',  phase:'travaux',     ico:'&#x1F6A7;', label:'Travaux de desimpermeabilisation',     delai:'Pendant travaux',       oblig:false, desc:'Depose d\'enrobes, decapage, amendement des sols, plantation. Suivi par un ecologue.' },
-    { id:'rn5',  phase:'post',        ico:'&#x1F4CA;', label:'Suivi ecologique post-travaux',         delai:'1 an puis periodique', oblig:false, desc:'Suivi de la recolonisation par la flore et la faune. Bilan annuel de la renaturation.' },
-  ],
-
-  /* ── ZONE HUMIDE ─────────────────────────────────────────────── */
-  zh_restauration: [
-    { id:'zh1',  phase:'avant',       ico:'&#x1F4CF;', label:'Delimitation zones humides (pedologie)', delai:'Avant tout projet',  oblig:true,  desc:'Sondages pedologiques et releves floristiques pour delimiter precisement les zones humides. Bureau d\'etudes agree.' },
-    { id:'zh2',  phase:'avant',       ico:'&#x1F4BB;', label:'Dossier loi sur l\'eau (IOTA)',          delai:'Avant travaux',        oblig:true,  desc:'Declaration si 0,1 a 1 ha. Autorisation si > 1 ha. Depot a la DDT 90 (service Eau).' },
-    { id:'zh3',  phase:'avant',       ico:'&#x1F4B0;', label:'Financement Agence de l\'eau RMC',      delai:'Avant travaux',         oblig:false, desc:'L\'agence de l\'eau RMC finance les projets de restauration de zones humides. Contacter la delegation de Besancon.' },
-    { id:'zh4',  phase:'instruction', ico:'&#x23F3;',  label:'Instruction IOTA (2 a 6 mois)',         delai:'J0 + 2 a 6 mois',      oblig:true,  desc:'La DDT 90 instruit le dossier. Consultation du public, avis des services, enquete publique si autorisation.' },
-    { id:'zh5',  phase:'travaux',     ico:'&#x1F6A7;', label:'Suivi de chantier (ecologue)',           delai:'Pendant travaux',       oblig:false, desc:'Un ecologue assure le suivi des travaux pour eviter l\'impact sur la faune et la flore de la zone humide.' },
-    { id:'zh6',  phase:'post',        ico:'&#x1F4CA;', label:'Suivi hydrologique et ecologique',      delai:'5 ans apres travaux',   oblig:true,  desc:'Suivi annuel du niveau d\'eau, de la flore et de la faune. Rapport de suivi a la DDT 90.' },
-  ],
-
-  /* ── ELEVAGE ─────────────────────────────────────────────────── */
-  elevage: [
-    { id:'el1',  phase:'avant',       ico:'&#x1F50D;', label:'Verification zone PLU (zone A)',        delai:'En amont',             oblig:true,  desc:'Les batiments d\'elevage sont autorises en zone A des PLU. Verifier le reglement et les distances aux habitations.' },
-    { id:'el2',  phase:'avant',       ico:'&#x1F4BB;', label:'Classement ICPE si seuils depassés',    delai:'Avant PC',             oblig:false, desc:'Bovins, porcins, volailles : verifier si l\'effectif depasse les seuils ICPE (declaration/enregistrement/autorisation).' },
-    { id:'el3',  phase:'avant',       ico:'&#x1F4A7;', label:'Plan de fumure et stockage effluents',  delai:'Avant PC',             oblig:true,  desc:'Si en zone vulnerable nitrates : capacite de stockage minimum 6 mois. Plan de fumure previsionnel obligatoire.' },
-    { id:'el4',  phase:'instruction', ico:'&#x1F4C4;', label:'Depot PC + ICPE si requis',             delai:'J0',                  oblig:true,  desc:'PC pour la construction. Dossier ICPE en parallele si applicable. Consultation de la Chambre d\'Agriculture.' },
-    { id:'el5',  phase:'instruction', ico:'&#x1F4DE;', label:'Enquete publique ICPE (autorisation)',  delai:'J0 + 4 mois',          oblig:false, desc:'Obligatoire pour les ICPE en regime autorisation (grands elevages). Commissaire enqueteur designe par le tribunal.' },
-    { id:'el6',  phase:'travaux',     ico:'&#x1F6A7;', label:'DOC + conformite ICPE',                 delai:'Avant 1ers travaux',   oblig:true,  desc:'DOC en mairie. Notification a l\'inspection ICPE avant le demarrage de l\'activite.' },
-    { id:'el7',  phase:'post',        ico:'&#x1F4CB;', label:'Registre d\'elevage et declaration',    delai:'En continu',            oblig:true,  desc:'Tenir le registre d\'elevage obligatoire. Declarer les effectifs a la DDT et a la chambre d\'agriculture.' },
-  ],
-
-  /* ── PAC / BIO ───────────────────────────────────────────────── */
-  bio: [
-    { id:'bio1', phase:'avant',       ico:'&#x1F343;', label:'Periode de conversion (2-3 ans)',       delai:'En amont',             oblig:true,  desc:'La conversion en AB necessite une periode de 2 ans (cultures) ou 3 ans (elevage) sans produits chimiques de synthese.' },
-    { id:'bio2', phase:'avant',       ico:'&#x1F4B0;', label:'Aide conversion AB (MAEC)',             delai:'Avant conversion',      oblig:false, desc:'Deposer une demande MAEC conversion AB avant le 15 mai aupres de la DDT 90 (PAC). Aide sur 5 ans.' },
-    { id:'bio3', phase:'instruction', ico:'&#x1F4C4;', label:'Notification a l\'organisme certificateur', delai:'Avant conversion',  oblig:true,  desc:'Notifier aupres d\'un organisme certificateur agree (Ecocert, Bureau Veritas...) avant de commencer la conversion.' },
-    { id:'bio4', phase:'travaux',     ico:'&#x1F52C;', label:'Audits annuels de certification',       delai:'Annuel',                oblig:true,  desc:'L\'organisme certificateur effectue des audits annuels pour maintenir la certification AB. Tenir un registre des pratiques.' },
-    { id:'bio5', phase:'post',        ico:'&#x2705;',  label:'Obtention du certificat AB',             delai:'Apres conversion',      oblig:true,  desc:'A l\'issue de la periode de conversion, l\'organisme certificateur delivre le certificat AB valable 1 an (renouvelable).' },
-  ],
-
-  /* Fallback pour les sous-types sans checklist dediee */
-  _default: [
-    { id:'def1', phase:'avant',       ico:'&#x1F50D;', label:'Verification du PLU et du zonage',       delai:'En amont',             oblig:true,  desc:'Consulter le document d\'urbanisme applicable (PLU, carte communale, RNU) et identifier les regles de la zone.' },
-    { id:'def2', phase:'avant',       ico:'&#x26A0;',  label:'Identification des risques naturels',    delai:'Avant achat / depot',   oblig:true,  desc:'Consulter le DDRM et les PPR applicable. Identifier les contraintes specifiques au site.' },
-    { id:'def3', phase:'instruction', ico:'&#x1F4C4;', label:'Depot de la demande d\'autorisation',   delai:'J0',                   oblig:true,  desc:'Deposer le formulaire CERFA adapte en mairie ou sur la plateforme Geozone. Constituer un dossier complet.' },
-    { id:'def4', phase:'instruction', ico:'&#x23F3;',  label:'Instruction de la demande',             delai:'Delai variable',        oblig:true,  desc:'Instruction par la mairie et les services consultes. Contacter la DDT 90 en amont pour anticiper les objections.' },
-    { id:'def5', phase:'travaux',     ico:'&#x1F6A7;', label:'Declaration d\'ouverture de chantier',  delai:'Avant 1ers travaux',   oblig:true,  desc:'DOC en mairie et DICT aux concessionnaires de reseaux 3 jours avant le debut des travaux.' },
-    { id:'def6', phase:'reception',   ico:'&#x1F4DD;', label:'Declaration d\'achevement (DAACT)',     delai:'Fin chantier',          oblig:true,  desc:'DAACT dans les 90 jours suivant l\'achevement des travaux.' },
-    { id:'def7', phase:'post',        ico:'&#x1F4B0;', label:'Taxe d\'amenagement',                   delai:'Apres DAACT',           oblig:true,  desc:'Reglement de la taxe d\'amenagement et des taxes annexes (voirie, eau, assainissement).' },
-  ],
-};
-
-/* ════════════════════════════════════════════════════════════════════
-   DONNEES GEOGRAPHIQUES PAR CHAPITRE D'ATLAS
-   ════════════════════════════════════════════════════════════════════ */
-var COUCHES_DATA = {
-
-  /* ── 1. ORGANISATION DU TERRITOIRE (C1–C8) ──────────────────────
-     Infrastructures structurantes, EPCI, paysages, relief            */
-  organisation: {
-    type: 'FeatureCollection', features: [
-      /* Axes routiers structurants (C7) */
-      { type:'Feature', properties:{ nom:'Autoroute A36 (Rhin-Rhone)', cat:'Reseau routier C7', type:'autoroute' },
-        geometry:{ type:'LineString', coordinates:[[6.640,47.578],[6.720,47.618],[6.860,47.637],[7.005,47.660],[7.120,47.678]] }},
-      { type:'Feature', properties:{ nom:'Route Nationale RN19', cat:'Reseau routier C7', type:'nationale' },
-        geometry:{ type:'LineString', coordinates:[[6.860,47.840],[6.860,47.740],[6.860,47.637],[6.860,47.520],[6.920,47.460]] }},
-      { type:'Feature', properties:{ nom:'RD83 Belfort-Colmar', cat:'Reseau routier C7', type:'departementale' },
-        geometry:{ type:'LineString', coordinates:[[6.860,47.637],[6.950,47.660],[7.050,47.700],[7.100,47.750]] }},
-      { type:'Feature', properties:{ nom:'Ligne TGV Belfort-Montbeliard', cat:'Reseau ferroviaire C7', type:'TGV' },
-        geometry:{ type:'LineString', coordinates:[[6.863,47.637],[6.895,47.615],[6.912,47.609]] }},
-      { type:'Feature', properties:{ nom:'Ligne Paris-Mulhouse', cat:'Reseau ferroviaire C7', type:'TER' },
-        geometry:{ type:'LineString', coordinates:[[6.710,47.660],[6.860,47.637],[7.000,47.620]] }},
-      { type:'Feature', properties:{ nom:'Canal du Rhone au Rhin', cat:'Reseau fluvial C7', type:'canal' },
-        geometry:{ type:'LineString', coordinates:[[6.740,47.590],[6.820,47.610],[6.900,47.620],[6.990,47.580]] }},
-      /* Sièges des EPCI (C4) */
-      { type:'Feature', properties:{ nom:'Belfort — Chef-lieu & siege GBCA', cat:'Intercommunalites C4', type:'epci' },
-        geometry:{ type:'Point', coordinates:[6.863, 47.637] }},
-      { type:'Feature', properties:{ nom:'Giromagny — Siege CCVS', cat:'Intercommunalites C4', type:'epci' },
-        geometry:{ type:'Point', coordinates:[6.831, 47.743] }},
-      { type:'Feature', properties:{ nom:'Delle — Siege CCST', cat:'Intercommunalites C4', type:'epci' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-      /* Pôles d'attraction (C5) */
-      { type:'Feature', properties:{ nom:'Aire d\'attraction de Belfort (pole principal)', cat:'Aires attraction C5', type:'pole' },
-        geometry:{ type:'Point', coordinates:[6.863, 47.637] }},
-      { type:'Feature', properties:{ nom:'Aire d\'attraction de Delle (pole secondaire)', cat:'Aires attraction C5', type:'pole' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-      /* Unités de paysage (C8) — zones approximatives */
-      { type:'Feature', properties:{ nom:'Montagne vosgienne (1/6 unites paysage C8)', cat:'Unites paysage C8', type:'paysage' },
-        geometry:{ type:'Polygon', coordinates:[[[6.65,47.72],[6.82,47.72],[6.82,47.87],[6.65,47.87],[6.65,47.72]]] }},
-      { type:'Feature', properties:{ nom:'Trouee de Belfort (2/6 unites paysage C8)', cat:'Unites paysage C8', type:'paysage' },
-        geometry:{ type:'Polygon', coordinates:[[[6.78,47.58],[7.00,47.58],[7.00,47.70],[6.78,47.70],[6.78,47.58]]] }},
-      { type:'Feature', properties:{ nom:'Plateaux du Jura (6/6 unites paysage C8)', cat:'Unites paysage C8', type:'paysage' },
-        geometry:{ type:'Polygon', coordinates:[[[6.70,47.44],[7.05,47.44],[7.05,47.55],[6.70,47.55],[6.70,47.44]]] }},
-    ]
-  },
-
-  /* ── 2. POPULATION, ECONOMIE ET SERVICES (C9–C15) ───────────────
-     Emplois, revenus, programmes ACV/PVD, Fonds vert               */
-  population: {
-    type: 'FeatureCollection', features: [
-      /* Poles d'emploi (C12) */
-      { type:'Feature', properties:{ nom:'Belfort — 23 500 emplois salaries (C12)', cat:'Emplois C12', type:'pole_emploi' },
-        geometry:{ type:'Point', coordinates:[6.863, 47.637] }},
-      { type:'Feature', properties:{ nom:'Trevenans — 3 178 emplois (C12)', cat:'Emplois C12', type:'pole_emploi' },
-        geometry:{ type:'Point', coordinates:[6.907, 47.610] }},
-      { type:'Feature', properties:{ nom:'Delle — 2 080 emplois (C12)', cat:'Emplois C12', type:'pole_emploi' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-      /* Communes ACV/PVD — Accompagnement ANCT (C15) */
-      { type:'Feature', properties:{ nom:'Belfort — Action Coeur de Ville (C15)', cat:'ANCT C15', type:'ACV' },
-        geometry:{ type:'Point', coordinates:[6.863, 47.637] }},
-      { type:'Feature', properties:{ nom:'Delle — Petites Villes de Demain (C15)', cat:'ANCT C15', type:'PVD' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-      { type:'Feature', properties:{ nom:'Giromagny — Petites Villes de Demain (C15)', cat:'ANCT C15', type:'PVD' },
-        geometry:{ type:'Point', coordinates:[6.831, 47.743] }},
-      /* Fonds vert (C14) */
-      { type:'Feature', properties:{ nom:'Projets Fonds vert (100 operations, 9M€ depuis 2023 — C14)', cat:'Fonds vert C14', type:'fonds_vert' },
-        geometry:{ type:'Point', coordinates:[6.860, 47.640] }},
-    ]
-  },
-
-  /* ── 3. NOUVELLES ENERGIES ET CHANGEMENT CLIMATIQUE (C16–C26) ────
-     ENR : PV toiture, PV parking, eolien, hydrogene, biomasse       */
-  energie: {
-    type: 'FeatureCollection', features: [
-      /* Photovoltaique existant (C21) */
-      { type:'Feature', properties:{ nom:'Parc PV au sol — Sevenans (C21)', cat:'PV existant C21', type:'pv_sol' },
-        geometry:{ type:'Point', coordinates:[6.903, 47.658] }},
-      { type:'Feature', properties:{ nom:'Toitures PV — Zone industrielle Belfort (C21)', cat:'PV existant C21', type:'pv_toiture' },
-        geometry:{ type:'Point', coordinates:[6.891, 47.648] }},
-      /* Potentiel PV parkings > 1500 m2 (C23 — loi APER) */
-      { type:'Feature', properties:{ nom:'Parking Intermarche Belfort (C23 — loi APER)', cat:'PV parking C23', type:'parking_pv' },
-        geometry:{ type:'Point', coordinates:[6.855, 47.632] }},
-      { type:'Feature', properties:{ nom:'Parking CHU Trevenans (C23 — loi APER)', cat:'PV parking C23', type:'parking_pv' },
-        geometry:{ type:'Point', coordinates:[6.907, 47.610] }},
-      { type:'Feature', properties:{ nom:'Parking Gare Belfort-Montbeliard TGV (C23)', cat:'PV parking C23', type:'parking_pv' },
-        geometry:{ type:'Point', coordinates:[6.912, 47.609] }},
-      /* Potentiel éolien (C24) — pas d'éolienne dans le 90, zones d'etude */
-      { type:'Feature', properties:{ nom:'Zone d\'etude eolienne Vosges du Sud (C24)', cat:'Potentiel eolien C24', type:'eolien_etude' },
-        geometry:{ type:'Polygon', coordinates:[[[6.65,47.73],[6.78,47.73],[6.78,47.82],[6.65,47.82],[6.65,47.73]]] }},
-      /* Filière hydrogène (C25) */
-      { type:'Feature', properties:{ nom:'Filiere hydrogene — GBCA (C25)', cat:'Hydrogene C25', type:'hydrogene' },
-        geometry:{ type:'Point', coordinates:[6.870, 47.640] }},
-      /* Energies biosourcées / chaufferies bois (C20) */
-      { type:'Feature', properties:{ nom:'Chaufferie bois collectif Belfort (C20)', cat:'Biomasse C20', type:'biomasse' },
-        geometry:{ type:'Point', coordinates:[6.852, 47.641] }},
-      { type:'Feature', properties:{ nom:'Reseau chaleur urbain Belfort (C20)', cat:'Reseau chaleur C20', type:'reseau_chaleur' },
-        geometry:{ type:'LineString', coordinates:[[6.840,47.635],[6.860,47.637],[6.875,47.643]] }},
-      /* Recharge vehicules electriques (C26) */
-      { type:'Feature', properties:{ nom:'Borne recharge VE — Gare Belfort (C26)', cat:'Mobilite electrique C26', type:'borne_ve' },
-        geometry:{ type:'Point', coordinates:[6.860, 47.640] }},
-    ]
-  },
-
-  /* ── 4. AGRICULTURE (C27–C40) ────────────────────────────────────
-     SAU, PAC, labels, circuits courts, nitrates, agroecologie       */
-  agriculture: {
-    type: 'FeatureCollection', features: [
-      /* Petites régions agricoles (C28) */
-      { type:'Feature', properties:{ nom:'Region agricole Sundgau (C28 — polyculture-elevage)', cat:'Regions agricoles C28', type:'region_agri' },
-        geometry:{ type:'Polygon', coordinates:[[[6.88,47.50],[7.08,47.50],[7.08,47.64],[6.88,47.64],[6.88,47.50]]] }},
-      { type:'Feature', properties:{ nom:'Region agricole Vosges du Sud (C28 — elevage bovin)', cat:'Regions agricoles C28', type:'region_agri' },
-        geometry:{ type:'Polygon', coordinates:[[[6.65,47.69],[6.84,47.69],[6.84,47.87],[6.65,47.87],[6.65,47.69]]] }},
-      { type:'Feature', properties:{ nom:'Region agricole Plaine de Belfort (C28 — grandes cultures)', cat:'Regions agricoles C28', type:'region_agri' },
-        geometry:{ type:'Polygon', coordinates:[[[6.75,47.60],[6.88,47.60],[6.88,47.70],[6.75,47.70],[6.75,47.60]]] }},
-      /* SIQO — Labels qualité (C30) */
-      { type:'Feature', properties:{ nom:'Fromage Comte AOP (C30 — SIQO)', cat:'Labels qualite C30', type:'siqo_aop' },
-        geometry:{ type:'Point', coordinates:[6.850, 47.720] }},
-      { type:'Feature', properties:{ nom:'Volaille de Bresse AOP (C30 — SIQO)', cat:'Labels qualite C30', type:'siqo_aop' },
-        geometry:{ type:'Point', coordinates:[6.980, 47.520] }},
-      /* Agriculture biologique (C36) */
-      { type:'Feature', properties:{ nom:'Exploitations AB certifiees — secteur Giromagny (C36)', cat:'Agriculture bio C36', type:'bio' },
-        geometry:{ type:'Point', coordinates:[6.831, 47.743] }},
-      /* Circuits courts (C38-C39) */
-      { type:'Feature', properties:{ nom:'Magasin de producteurs — La Ferme du 90 (C39)', cat:'Circuits courts C39', type:'circuit_court' },
-        geometry:{ type:'Point', coordinates:[6.892, 47.648] }},
-      { type:'Feature', properties:{ nom:'AMAP Belfort centre (C39)', cat:'Circuits courts C39', type:'circuit_court' },
-        geometry:{ type:'Point', coordinates:[6.856, 47.638] }},
-      { type:'Feature', properties:{ nom:'Marche de producteurs Delle (C39)', cat:'Circuits courts C39', type:'circuit_court' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-      /* Zones vulnérables nitrates (C40) */
-      { type:'Feature', properties:{ nom:'Zone vulnerable nitrates — Bassin de l\'Allan (C40)', cat:'Nitrates C40', type:'nitrates' },
-        geometry:{ type:'Polygon', coordinates:[[[6.84,47.50],[7.05,47.50],[7.05,47.64],[6.84,47.64],[6.84,47.50]]] }},
-      { type:'Feature', properties:{ nom:'Zone vulnerable nitrates — Vallee Bourbeuse (C40)', cat:'Nitrates C40', type:'nitrates' },
-        geometry:{ type:'Polygon', coordinates:[[[6.70,47.60],[6.86,47.60],[6.86,47.66],[6.70,47.66],[6.70,47.60]]] }},
-      /* Agroécologie — Collectifs (C37) */
-      { type:'Feature', properties:{ nom:'Collectif agroecologique CCST — L\'Eau d\'Ici (C37)', cat:'Agroecologie C37', type:'agroecologie' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-    ]
-  },
-
-  /* ── 5. EAU (C41–C49) ────────────────────────────────────────────
-     Cours d'eau, SAGE, masses d'eau, zones humides, assainissement  */
-  eau: {
-    type: 'FeatureCollection', features: [
-      /* Cours d'eau principaux (C41) */
-      { type:'Feature', properties:{ nom:'La Savoureuse — troncon vosgien (C41)', cat:'Cours d\'eau C41', type:'cours_eau' },
-        geometry:{ type:'LineString', coordinates:[[6.825,47.845],[6.840,47.750],[6.858,47.700],[6.860,47.637],[6.875,47.560]] }},
-      { type:'Feature', properties:{ nom:'La Bourbeuse (C41)', cat:'Cours d\'eau C41', type:'cours_eau' },
-        geometry:{ type:'LineString', coordinates:[[6.668,47.654],[6.730,47.648],[6.810,47.643],[6.865,47.638],[6.940,47.625]] }},
-      { type:'Feature', properties:{ nom:'L\'Allaine (C41)', cat:'Cours d\'eau C41', type:'cours_eau' },
-        geometry:{ type:'LineString', coordinates:[[6.920,47.540],[6.930,47.490],[6.950,47.460],[6.970,47.440]] }},
-      { type:'Feature', properties:{ nom:'La Lizaine (C41)', cat:'Cours d\'eau C41', type:'cours_eau' },
-        geometry:{ type:'LineString', coordinates:[[6.750,47.504],[6.820,47.530],[6.900,47.545],[6.960,47.555]] }},
-      { type:'Feature', properties:{ nom:'La Douce / Allan aval (C41)', cat:'Cours d\'eau C41', type:'cours_eau' },
-        geometry:{ type:'LineString', coordinates:[[6.990,47.480],[6.960,47.510],[6.935,47.540]] }},
-      /* SAGE Allan (C43) */
-      { type:'Feature', properties:{ nom:'Perimetre SAGE Allan (C43)', cat:'SAGE C43', type:'sage' },
-        geometry:{ type:'Polygon', coordinates:[[[6.65,47.44],[7.12,47.44],[7.12,47.87],[6.65,47.87],[6.65,47.44]]] }},
-      /* Zones humides (C46) */
-      { type:'Feature', properties:{ nom:'Zones humides — fond de vallee Savoureuse (C46)', cat:'Zones humides C46', type:'zone_humide' },
-        geometry:{ type:'Polygon', coordinates:[[[6.845,47.600],[6.875,47.600],[6.875,47.680],[6.845,47.680],[6.845,47.600]]] }},
-      { type:'Feature', properties:{ nom:'Zones humides — vallee Bourbeuse (C46)', cat:'Zones humides C46', type:'zone_humide' },
-        geometry:{ type:'Polygon', coordinates:[[[6.750,47.620],[6.880,47.620],[6.880,47.655],[6.750,47.655],[6.750,47.620]]] }},
-      { type:'Feature', properties:{ nom:'Etangs du Sundgau > 2600 plans d\'eau (C47)', cat:'Plans d\'eau C47', type:'plan_eau' },
-        geometry:{ type:'Polygon', coordinates:[[[6.90,47.48],[7.05,47.48],[7.05,47.55],[6.90,47.55],[6.90,47.48]]] }},
-      /* Stations d'épuration (C49) */
-      { type:'Feature', properties:{ nom:'STEU Belfort (C49)', cat:'Assainissement C49', type:'step' },
-        geometry:{ type:'Point', coordinates:[6.878, 47.620] }},
-      { type:'Feature', properties:{ nom:'STEU Delle (C49)', cat:'Assainissement C49', type:'step' },
-        geometry:{ type:'Point', coordinates:[6.995, 47.500] }},
-      { type:'Feature', properties:{ nom:'STEU Delle-Lebetain (C49)', cat:'Assainissement C49', type:'step' },
-        geometry:{ type:'Point', coordinates:[7.005, 47.495] }},
-      /* Captages AEP (C48) */
-      { type:'Feature', properties:{ nom:'Captage AEP Savoureuse — Belfort (C48)', cat:'Prelevements eau C48', type:'captage_aep' },
-        geometry:{ type:'Point', coordinates:[6.860, 47.660] }},
-      { type:'Feature', properties:{ nom:'Captage AEP Allaine — Sud Territoire (C48)', cat:'Prelevements eau C48', type:'captage_aep' },
-        geometry:{ type:'Point', coordinates:[6.948, 47.476] }},
-    ]
-  },
-
-  /* ── 6. BIODIVERSITE ET FORET (C50–C58) ─────────────────────────
-     TVB, reserves naturelles, Natura 2000, ZNIEFF, forets           */
-  biodiversite: {
-    type: 'FeatureCollection', features: [
-      /* Trame verte — réservoirs (C50) */
-      { type:'Feature', properties:{ nom:'Massif vosgien — reservoir biodiversite (C50)', cat:'Trame verte C50', type:'reservoir' },
-        geometry:{ type:'Polygon', coordinates:[[[6.648,47.718],[6.820,47.718],[6.820,47.870],[6.648,47.870],[6.648,47.718]]] }},
-      { type:'Feature', properties:{ nom:'Massif du Jura — reservoir biodiversite (C50)', cat:'Trame verte C50', type:'reservoir' },
-        geometry:{ type:'Polygon', coordinates:[[[6.850,47.440],[7.100,47.440],[7.100,47.550],[6.850,47.550],[6.850,47.440]]] }},
-      /* Trame bleue — corridors (C51) */
-      { type:'Feature', properties:{ nom:'Ripisylve Savoureuse — corridor bleu (C51)', cat:'Trame bleue C51', type:'corridor_bleu' },
-        geometry:{ type:'LineString', coordinates:[[6.825,47.845],[6.845,47.750],[6.858,47.700],[6.860,47.637],[6.875,47.560]] }},
-      { type:'Feature', properties:{ nom:'Ripisylve Bourbeuse — corridor bleu (C51)', cat:'Trame bleue C51', type:'corridor_bleu' },
-        geometry:{ type:'LineString', coordinates:[[6.668,47.654],[6.730,47.648],[6.810,47.643],[6.865,47.638]] }},
-      /* Protection patrimoine naturel (C52) */
-      { type:'Feature', properties:{ nom:'Reserve naturelle nationale — Ballons des Vosges (C52)', cat:'Protection C52', type:'reserve' },
-        geometry:{ type:'Point', coordinates:[6.837, 47.821] }},
-      { type:'Feature', properties:{ nom:'Zone Natura 2000 — Vosges du Sud (C52)', cat:'Natura 2000 C52', type:'natura2000' },
-        geometry:{ type:'Polygon', coordinates:[[[6.648,47.700],[6.820,47.700],[6.820,47.870],[6.648,47.870],[6.648,47.700]]] }},
-      /* ZNIEFF (C53) */
-      { type:'Feature', properties:{ nom:'ZNIEFF type I — Tourbieres des Hautes-Vosges (C53)', cat:'ZNIEFF C53', type:'znieff1' },
-        geometry:{ type:'Point', coordinates:[6.780, 47.810] }},
-      { type:'Feature', properties:{ nom:'ZNIEFF type II — Forets vosgiennes (C53)', cat:'ZNIEFF C53', type:'znieff2' },
-        geometry:{ type:'Polygon', coordinates:[[[6.648,47.690],[6.820,47.690],[6.820,47.870],[6.648,47.870],[6.648,47.690]]] }},
-      /* Forêts — couverture 43% du territoire (C57) */
-      { type:'Feature', properties:{ nom:'Foret communale de Giromagny (C57 — 43% du 90 boise)', cat:'Forets C57', type:'foret' },
-        geometry:{ type:'Polygon', coordinates:[[[6.775,47.730],[6.845,47.730],[6.845,47.775],[6.775,47.775],[6.775,47.730]]] }},
-      { type:'Feature', properties:{ nom:'Foret de Rougegoutte (C57)', cat:'Forets C57', type:'foret' },
-        geometry:{ type:'Polygon', coordinates:[[[6.720,47.690],[6.780,47.690],[6.780,47.720],[6.720,47.720],[6.720,47.690]]] }},
-      { type:'Feature', properties:{ nom:'Foret de la Douce — massif jurassien (C57)', cat:'Forets C57', type:'foret' },
-        geometry:{ type:'Polygon', coordinates:[[[6.950,47.450],[7.050,47.450],[7.050,47.510],[6.950,47.510],[6.950,47.450]]] }},
-      /* Ballon d'Alsace — OGS (C58-C89) */
-      { type:'Feature', properties:{ nom:'Ballon d\'Alsace 1247 m — Operation Grand Site (C57/C89)', cat:'Grand Site C89', type:'grand_site' },
-        geometry:{ type:'Point', coordinates:[6.837, 47.821] }},
-    ]
-  },
-
-  /* ── 7. RISQUES NATURELS (C56–C64) ──────────────────────────────
-     Inondation PPRi, sismicite, mouvements terrain, radon, feux     */
-  risques: {
-    type: 'FeatureCollection', features: [
-      /* PPRi — zones inondables (C57–C58) */
-      { type:'Feature', properties:{ nom:'PPRi Savoureuse — zone inondable (C58)', cat:'PPRi C58', type:'ppri' },
-        geometry:{ type:'Polygon', coordinates:[[[6.840,47.590],[6.888,47.590],[6.888,47.720],[6.840,47.720],[6.840,47.590]]] }},
-      { type:'Feature', properties:{ nom:'PPRi Bourbeuse — zone inondable (C58)', cat:'PPRi C58', type:'ppri' },
-        geometry:{ type:'Polygon', coordinates:[[[6.700,47.618],[6.890,47.618],[6.890,47.658],[6.700,47.658],[6.700,47.618]]] }},
-      { type:'Feature', properties:{ nom:'PPRi Allaine — zone inondable (C58)', cat:'PPRi C58', type:'ppri' },
-        geometry:{ type:'Polygon', coordinates:[[[6.900,47.500],[6.980,47.500],[6.980,47.555],[6.900,47.555],[6.900,47.500]]] }},
-      /* AZI (C58) */
-      { type:'Feature', properties:{ nom:'AZI Bourbeuse — Atlas Zones Inondables (C58)', cat:'AZI C58', type:'azi' },
-        geometry:{ type:'Polygon', coordinates:[[[6.700,47.615],[6.890,47.615],[6.890,47.655],[6.700,47.655],[6.700,47.615]]] }},
-      /* Zones sismiques (C59) */
-      { type:'Feature', properties:{ nom:'Zone sismicite 3 (moderee) — Massif vosgien (C59)', cat:'Sismicite C59', type:'sismique_3' },
-        geometry:{ type:'Polygon', coordinates:[[[6.650,47.700],[6.830,47.700],[6.830,47.870],[6.650,47.870],[6.650,47.700]]] }},
-      { type:'Feature', properties:{ nom:'Zone sismicite 2 (faible) — Plaine et Jura (C59)', cat:'Sismicite C59', type:'sismique_2' },
-        geometry:{ type:'Polygon', coordinates:[[[6.840,47.440],[7.120,47.440],[7.120,47.700],[6.840,47.700],[6.840,47.440]]] }},
-      /* Mouvements de terrain (C60) */
-      { type:'Feature', properties:{ nom:'Alea mouvements terrain — versants vosgiens (C60)', cat:'Mouvements terrain C60', type:'mvt_terrain' },
-        geometry:{ type:'Polygon', coordinates:[[[6.655,47.680],[6.820,47.680],[6.820,47.870],[6.655,47.870],[6.655,47.680]]] }},
-      /* Retrait-gonflement argiles (C61) */
-      { type:'Feature', properties:{ nom:'Zone argiles — alea moyen (C61)', cat:'Argiles C61', type:'argiles_moyen' },
-        geometry:{ type:'Polygon', coordinates:[[[6.780,47.560],[6.960,47.560],[6.960,47.660],[6.780,47.660],[6.780,47.560]]] }},
-      /* Risque minier (C62) */
-      { type:'Feature', properties:{ nom:'Ancienne mine de Giromagny (C62)', cat:'Risque minier C62', type:'minier' },
-        geometry:{ type:'Point', coordinates:[6.831, 47.743] }},
-      { type:'Feature', properties:{ nom:'Zone de vigilance miniere Masevaux (C62)', cat:'Risque minier C62', type:'minier' },
-        geometry:{ type:'Polygon', coordinates:[[[6.790,47.735],[6.830,47.735],[6.830,47.760],[6.790,47.760],[6.790,47.735]]] }},
-      /* Feux de forêt (C63) */
-      { type:'Feature', properties:{ nom:'Zone alea feux de foret — Vosges (C63)', cat:'Feux foret C63', type:'feux_foret' },
-        geometry:{ type:'Polygon', coordinates:[[[6.648,47.700],[6.820,47.700],[6.820,47.870],[6.648,47.870],[6.648,47.700]]] }},
-      /* Radon (C64) */
-      { type:'Feature', properties:{ nom:'Zone a potentiel radon eleve — granite vosgien (C64)', cat:'Radon C64', type:'radon' },
-        geometry:{ type:'Polygon', coordinates:[[[6.648,47.700],[6.820,47.700],[6.820,47.870],[6.648,47.870],[6.648,47.700]]] }},
-    ]
-  },
-
-  /* ── 8. URBANISME ET AMENAGEMENT DURABLE (C65–C71) ──────────────
-     PLU, SCoT, sobriete fonciere, friches                           */
-  urbanisme: {
-    type: 'FeatureCollection', features: [
-      /* Communes par type de document (C65) */
-      { type:'Feature', properties:{ nom:'Communes sous PLU (53/101) — exemple Belfort (C65)', cat:'Documents urbanisme C65', type:'PLU' },
-        geometry:{ type:'Point', coordinates:[6.863, 47.637] }},
-      { type:'Feature', properties:{ nom:'Commune sous RNU (31/101) — sans document oppose (C65)', cat:'Documents urbanisme C65', type:'RNU' },
-        geometry:{ type:'Point', coordinates:[6.750, 47.780] }},
-      { type:'Feature', properties:{ nom:'PLUi CCVS en cours d\'elaboration (22 communes) (C66)', cat:'Procedures C66', type:'PLUi' },
-        geometry:{ type:'Point', coordinates:[6.831, 47.743] }},
-      /* SCoT */
-      { type:'Feature', properties:{ nom:'Perimetre SCoT du Territoire de Belfort (approuve 2014, en revision)', cat:'SCoT', type:'scot' },
-        geometry:{ type:'Polygon', coordinates:[[[6.648,47.440],[7.120,47.440],[7.120,47.870],[6.648,47.870],[6.648,47.440]]] }},
-      /* Sobriété foncière — zones AU (C69) */
-      { type:'Feature', properties:{ nom:'Zone d\'urbanisation future AU — Cravanche (C69)', cat:'Zones AU C69', type:'zone_AU' },
-        geometry:{ type:'Polygon', coordinates:[[[6.823,47.618],[6.862,47.618],[6.862,47.638],[6.823,47.638],[6.823,47.618]]] }},
-      { type:'Feature', properties:{ nom:'Zone d\'extension ZAE — Sevenans (C69)', cat:'Zones AU C69', type:'zone_AUx' },
-        geometry:{ type:'Polygon', coordinates:[[[6.870,47.647],[6.935,47.647],[6.935,47.672],[6.870,47.672],[6.870,47.647]]] }},
-      /* Friches (C70–C71) */
-      { type:'Feature', properties:{ nom:'Friche industrielle Alsthom — Belfort (C71)', cat:'Friches C71', type:'friche' },
-        geometry:{ type:'Point', coordinates:[6.880, 47.630] }},
-      { type:'Feature', properties:{ nom:'Friche industrielle ACB — Beaucourt (C71)', cat:'Friches C71', type:'friche' },
-        geometry:{ type:'Point', coordinates:[6.921, 47.491] }},
-      { type:'Feature', properties:{ nom:'Friche commerciale Delle (C71)', cat:'Friches C71', type:'friche' },
-        geometry:{ type:'Point', coordinates:[6.990, 47.504] }},
-    ]
-  },
-
-  /* ── 9. HABITAT ET LOGEMENT (C72–C81) ───────────────────────────
-     Precarite energetique, logements sociaux, QPV, gens du voyage   */
-  habitat: {
-    type: 'FeatureCollection', features: [
-      /* Logements sociaux > 30% (C78–C79) */
-      { type:'Feature', properties:{ nom:'Parc social Belfort — 41% logements sociaux (C78)', cat:'Logements sociaux C78', type:'HLM' },
-        geometry:{ type:'Point', coordinates:[6.863, 47.637] }},
-      { type:'Feature', properties:{ nom:'Parc social Beaucourt — 36,7% (C78)', cat:'Logements sociaux C78', type:'HLM' },
-        geometry:{ type:'Point', coordinates:[6.921, 47.491] }},
-      { type:'Feature', properties:{ nom:'Parc social Delle — 36,7% (C78)', cat:'Logements sociaux C78', type:'HLM' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-      /* Quartiers prioritaires de la ville (C80) */
-      { type:'Feature', properties:{ nom:'QPV Residence Europe — Belfort (C80)', cat:'QPV C80', type:'qpv' },
-        geometry:{ type:'Polygon', coordinates:[[[6.840,47.627],[6.862,47.627],[6.862,47.643],[6.840,47.643],[6.840,47.627]]] }},
-      { type:'Feature', properties:{ nom:'QPV Les Residences — Offemont (C80)', cat:'QPV C80', type:'qpv' },
-        geometry:{ type:'Polygon', coordinates:[[[6.810,47.655],[6.835,47.655],[6.835,47.668],[6.810,47.668],[6.810,47.655]]] }},
-      { type:'Feature', properties:{ nom:'QPV Cul-de-Sac / La Ruche — Bavilliers (C80)', cat:'QPV C80', type:'qpv' },
-        geometry:{ type:'Polygon', coordinates:[[[6.865,47.612],[6.880,47.612],[6.880,47.620],[6.865,47.620],[6.865,47.612]]] }},
-      { type:'Feature', properties:{ nom:'QPV Vieux-Beau / Tivoli — Valdoie (C80)', cat:'QPV C80', type:'qpv' },
-        geometry:{ type:'Polygon', coordinates:[[[6.828,47.656],[6.842,47.656],[6.842,47.664],[6.828,47.664],[6.828,47.656]]] }},
-      /* Aires d'accueil gens du voyage (C81) */
-      { type:'Feature', properties:{ nom:'Aire accueil gens du voyage — Belfort (C81)', cat:'Gens du voyage C81', type:'aire_gdv' },
-        geometry:{ type:'Point', coordinates:[6.848, 47.648] }},
-      { type:'Feature', properties:{ nom:'Aire accueil gens du voyage — Delle (C81)', cat:'Gens du voyage C81', type:'aire_gdv' },
-        geometry:{ type:'Point', coordinates:[6.988, 47.505] }},
-      { type:'Feature', properties:{ nom:'Aire de grand passage — Fontaine (C81)', cat:'Gens du voyage C81', type:'aire_gdv' },
-        geometry:{ type:'Point', coordinates:[6.895, 47.628] }},
-      /* Equipements santé */
-      { type:'Feature', properties:{ nom:'CHBM — Centre Hospitalier Belfort-Montbeliard', cat:'Sante', type:'hopital' },
-        geometry:{ type:'Point', coordinates:[6.863, 47.637] }},
-      { type:'Feature', properties:{ nom:'Hopital de Delle', cat:'Sante', type:'hopital' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-    ]
-  },
-
-  /* ── 10. MOBILITES, TRANSPORTS ET SECURITE ROUTIERE (C82–C87) ───
-     Flux vehicules, cyclable, bruit, radars, accidents              */
-  mobilite: {
-    type: 'FeatureCollection', features: [
-      /* Axes à fort trafic > 20 000 veh/j (C82) */
-      { type:'Feature', properties:{ nom:'A36 Belfort-Montbeliard >40 000 veh/j (C82)', cat:'Flux vehicules C82', type:'trafic_fort' },
-        geometry:{ type:'LineString', coordinates:[[6.860,47.637],[6.910,47.609],[6.960,47.592]] }},
-      { type:'Feature', properties:{ nom:'A36 Belfort-Mulhouse >20 000 veh/j (C82)', cat:'Flux vehicules C82', type:'trafic_fort' },
-        geometry:{ type:'LineString', coordinates:[[7.000,47.658],[7.040,47.670],[7.090,47.675]] }},
-      { type:'Feature', properties:{ nom:'RN19 acces Belfort >20 000 veh/j (C82)', cat:'Flux vehicules C82', type:'trafic_fort' },
-        geometry:{ type:'LineString', coordinates:[[6.860,47.637],[6.860,47.680],[6.860,47.720]] }},
-      /* Aménagements cyclables (C83) */
-      { type:'Feature', properties:{ nom:'Coulee verte Belfort-Montbeliard (C83)', cat:'Cyclable C83', type:'voie_verte' },
-        geometry:{ type:'LineString', coordinates:[[6.860,47.637],[6.895,47.617],[6.912,47.609]] }},
-      { type:'Feature', properties:{ nom:'Piste cyclable departementale D83 (C83)', cat:'Cyclable C83', type:'piste_velo' },
-        geometry:{ type:'LineString', coordinates:[[6.860,47.637],[6.870,47.710],[6.835,47.743]] }},
-      { type:'Feature', properties:{ nom:'Reseau cyclable Grand Belfort >75 km (C83)', cat:'Cyclable C83', type:'reseau_velo' },
-        geometry:{ type:'Point', coordinates:[6.860, 47.637] }},
-      /* Radars (C86) — 28 radars fixes */
-      { type:'Feature', properties:{ nom:'Radar fixe A36 PK12 (C86 — 28 radars dans le 90)', cat:'Radars C86', type:'radar' },
-        geometry:{ type:'Point', coordinates:[6.900, 47.620] }},
-      { type:'Feature', properties:{ nom:'Radar fixe RN19 Belfort Nord (C86)', cat:'Radars C86', type:'radar' },
-        geometry:{ type:'Point', coordinates:[6.860, 47.690] }},
-      { type:'Feature', properties:{ nom:'Radar fixe Delle acces suisse (C86)', cat:'Radars C86', type:'radar' },
-        geometry:{ type:'Point', coordinates:[6.990, 47.495] }},
-      /* Zones accidentogènes (C87) */
-      { type:'Feature', properties:{ nom:'Point noir accident — echangeur A36/RN19 (C87 — 129 accidents 2021-23)', cat:'Accidents C87', type:'accident' },
-        geometry:{ type:'Point', coordinates:[6.860, 47.637] }},
-      { type:'Feature', properties:{ nom:'Point noir accident — Delle acces RN19 (C87)', cat:'Accidents C87', type:'accident' },
-        geometry:{ type:'Point', coordinates:[6.993, 47.504] }},
-      /* Bruit (C84-C85) */
-      { type:'Feature', properties:{ nom:'Secteur affecte bruit cat.1 A36 (C84-C85)', cat:'Bruit C84', type:'bruit_1' },
-        geometry:{ type:'Polygon', coordinates:[[[6.840,47.605],[6.960,47.605],[6.960,47.668],[6.840,47.668],[6.840,47.605]]] }},
-    ]
-  },
-
-  /* ── 11. PATRIMOINE ET AUTRES THEMATIQUES (C88–C91) ─────────────
-     Monuments historiques, archeologie, moustique tigre             */
-  patrimoine: {
-    type: 'FeatureCollection', features: [
-      /* Monuments historiques classés (C88) */
-      { type:'Feature', properties:{ nom:'Citadelle Vauban de Belfort — Classe MH (C88)', cat:'Monuments MH C88', type:'MH_classe' },
-        geometry:{ type:'Point', coordinates:[6.865, 47.638] }},
-      { type:'Feature', properties:{ nom:'Lion de Belfort — Bartholdi — Classe MH (C88)', cat:'Monuments MH C88', type:'MH_classe' },
-        geometry:{ type:'Point', coordinates:[6.862, 47.636] }},
-      { type:'Feature', properties:{ nom:'Temple Saint-Christophe Belfort — Inscrit MH (C88)', cat:'Monuments MH C88', type:'MH_inscrit' },
-        geometry:{ type:'Point', coordinates:[6.860, 47.638] }},
-      { type:'Feature', properties:{ nom:'Eglise Saint-Georges Rougegoutte — Inscrit MH (C88)', cat:'Monuments MH C88', type:'MH_inscrit' },
-        geometry:{ type:'Point', coordinates:[6.720, 47.710] }},
-      { type:'Feature', properties:{ nom:'Chateau du Rosemont — Inscrit MH (C88)', cat:'Monuments MH C88', type:'MH_inscrit' },
-        geometry:{ type:'Point', coordinates:[6.850, 47.730] }},
-      { type:'Feature', properties:{ nom:'Perimetre de protection MH Belfort 500m (C88)', cat:'Abords MH C88', type:'perimetre_MH' },
-        geometry:{ type:'Polygon', coordinates:[[[6.820,47.608],[6.905,47.608],[6.905,47.668],[6.820,47.668],[6.820,47.608]]] }},
-      /* Sites archéologiques (C90) */
-      { type:'Feature', properties:{ nom:'ZPPA Belfort centre — zone archeologique (C90)', cat:'Archeologie C90', type:'zppa' },
-        geometry:{ type:'Polygon', coordinates:[[[6.845,47.625],[6.885,47.625],[6.885,47.650],[6.845,47.650],[6.845,47.625]]] }},
-      { type:'Feature', properties:{ nom:'Vestige romain — voie romaine Mandeure (C90)', cat:'Archeologie C90', type:'site_archeo' },
-        geometry:{ type:'Point', coordinates:[6.950, 47.480] }},
-      /* Site Grand Site Ballon d'Alsace (C89) */
-      { type:'Feature', properties:{ nom:'Operation Grand Site Ballon d\'Alsace (C89)', cat:'Grand Site C89', type:'grand_site' },
-        geometry:{ type:'Polygon', coordinates:[[[6.700,47.770],[6.860,47.770],[6.860,47.870],[6.700,47.870],[6.700,47.770]]] }},
-      /* Risques sanitaires — moustique tigre (C91) */
-      { type:'Feature', properties:{ nom:'Zone surveillance moustique tigre — Nord Franche-Comte (C91)', cat:'Sanitaire C91', type:'moustique' },
-        geometry:{ type:'Polygon', coordinates:[[[6.648,47.580],[7.120,47.580],[7.120,47.680],[6.648,47.680],[6.648,47.580]]] }},
-    ]
-  },
-
-};
 
 /* ── État global de l'application ───────────────────────────────── */
+/* ── DONNÉES EXTERNALISÉES — chargées depuis data.json ── */
+var COUCHES_IGN, GPF_WMTS, COUCHE_STYLES, SOUS_TYPES, CHECKLISTS;
+var AXES_META, ENJEUX_MINDMAP, CONTACTS_DB, SIM_BASE, ZONES_RISQUE;
+var OSM_TAGS, RPG_GROUPES_SENSIBLES, SG_CAS, SG_QUESTIONS, SUGG_ICONS;
+var COUCHES_DATA, ENJEUX_CONTEXTUELS, ENJEUX_ZONES;
+var TYPES, TAILLES, THEMES;
+var GEOJSON_TB, ENJEUX;
+
 var A = {
   /* Projet */
   typeProjet:    null,    // id du type sélectionné
@@ -785,29 +63,70 @@ var A = {
 
 /* ── Point d'entrée ─────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', function() {
-  A.themesActifs = new Set(THEMES.map(function(t){ return t.id; }));
-  initCarte();
-  genBoutons();
-  genBadgesThemes();
-  genControleCouches();
-  majTaille(1);
-  initTheme();
+  console.log('%c DDT90 v2026-03-20 ','background:#1d4ed8;color:#fff;padding:2px 6px;border-radius:3px;');
 
-  /* Tutoriel : affiché à chaque démarrage */
-  setTimeout(afficherTutoriel, 80);
+  /* Chargement des données depuis data.json */
+  fetch('data.json')
+    .then(function(r) {
+      if (!r.ok) throw new Error('data.json introuvable (HTTP ' + r.status + ')');
+      return r.json();
+    })
+    .then(function(d) {
+      COUCHES_IGN         = d.COUCHES_IGN;
+      COUCHE_STYLES       = d.COUCHE_STYLES;
+      SOUS_TYPES          = d.SOUS_TYPES;
+      CHECKLISTS          = d.CHECKLISTS;
+      AXES_META           = d.AXES_META;
+      ENJEUX_MINDMAP      = d.ENJEUX_MINDMAP;
+      CONTACTS_DB         = d.CONTACTS_DB;
+      SIM_BASE            = d.SIM_BASE;
+      ZONES_RISQUE        = d.ZONES_RISQUE;
+      OSM_TAGS            = d.OSM_TAGS;
+      RPG_GROUPES_SENSIBLES = d.RPG_GROUPES_SENSIBLES;
+      SG_CAS              = d.SG_CAS;
+      SG_QUESTIONS        = d.SG_QUESTIONS;
+      SUGG_ICONS          = d.SUGG_ICONS;
+      COUCHES_DATA        = d.COUCHES_DATA;
+      ENJEUX_CONTEXTUELS  = d.ENJEUX_CONTEXTUELS;
+      ENJEUX_ZONES        = d.ENJEUX_ZONES;
+      TYPES               = d.TYPES;
+      TAILLES             = d.TAILLES;
+      THEMES              = d.THEMES;
+      GEOJSON_TB          = d.GEOJSON_TB;
+      ENJEUX              = d.ENJEUX;
+
+      /* Initialisation après chargement des données */
+      A.themesActifs = new Set(THEMES.map(function(t){ return t.id; }));
+      initCarte();
+      genBoutons();
+      genBadgesThemes();
+      genControleCouches();
+      majTaille(1);
+      initTheme();
+
+      /* Tutoriel : affiché à chaque démarrage */
+      setTimeout(afficherTutoriel, 80);
+    })
+    .catch(function(err) {
+      console.error('[DDT90] Erreur chargement data.json :', err);
+      document.body.innerHTML = '<div style="padding:40px;font-family:Arial;color:#dc2626;"><h2>&#x26A0; Erreur de chargement</h2><p>Impossible de charger <strong>data.json</strong>.</p><p>Vérifiez que l\'application est lancée via HTTP (python3 -m http.server 8080) et non via file://</p><p>Détail : '+err.message+'</p></div>';
+    });
 });
 
-/* ════════════════════════════════════════════════════════════════════
-   CARTE LEAFLET
-   ════════════════════════════════════════════════════════════════════ */
+/* ── CARTE LEAFLET — initialisation, communes, marqueurs, listeners ────────── */
 
-/* Initialise la carte Leaflet, le fond OSM, les communes et les marqueurs de villes. */
 function initCarte() {
   A.carte = L.map('map', {
     center: [47.637, 6.863],
     zoom: 11,
     doubleClickZoom: false,   // désactivé pour ne pas interférer avec le déplacement
   });
+
+  /* Pane dédié aux communes : z-index sous la légende, pointer-events none
+     pour que les clics traversent jusqu'aux contrôles HTML (légende, boutons) */
+  A.carte.createPane('communesPane');
+  A.carte.getPane('communesPane').style.zIndex = 200;
+  A.carte.getPane('communesPane').style.pointerEvents = 'none';
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -819,9 +138,31 @@ function initCarte() {
   ajouterListenersGlobaux();
 }
 
+/**
+ * Retourne true si au moins une couche Géoplateforme IGN est active
+ * ET visible au zoom actuel (zoom >= minZoom de la couche).
+ * Désactive tooltip et highlight communes pour toutes les couches IGN.
+ */
+/**
+ * Retourne true si au moins une couche Géoplateforme IGN est active
+ * ET visible au zoom courant (zoom >= minZoom). Utilisé pour désactiver
+ * le tooltip et le highlight des communes quand des tuiles IGN les recouvrent.
+ * @returns {boolean}
+ */
+function anyIgnActive() {
+  var zoom = A.carte ? A.carte.getZoom() : 0;
+  return Object.keys(COUCHES_IGN).some(function(id) {
+    if (!A.couchesActives.has(id)) return false;
+    var def = COUCHES_IGN[id];
+    return zoom >= (def.minZoom || 6);
+  });
+}
+
+
 /* Charge le GeoJSON des communes avec tooltips et highlight */
 function ajouterCommunesGeoJSON() {
   A.layerCommunes = L.geoJSON(GEOJSON_TB, {
+    pane:  'communesPane',
     style: styleCommuneDefaut,
     onEachFeature: function(feature, layer) {
       /* Tooltip hover */
@@ -834,21 +175,33 @@ function ajouterCommunesGeoJSON() {
         ? p.population.toLocaleString('fr-FR') + ' hab.'
         : 'N/A';
 
+      /* Tooltip en mode manuel (pas sticky) pour pouvoir le bloquer
+         quand la couche Agriculture IGN est active au zoom 13+ */
       layer.bindTooltip(
         '<div class="tt-nom">' + p.nom + '</div>' +
         '<div class="tt-row"><span class="tt-ico">&#x1F465;</span><span>Population&nbsp;: </span><span class="tt-val">' + pop + '</span></div>' +
         '<div class="tt-row"><span class="tt-ico">&#x1F4CF;</span><span>Superficie&nbsp;: </span><span class="tt-val">' + supAff + '</span></div>' +
         '<div class="tt-row"><span class="tt-ico">&#x1F4EE;</span><span>Code postal&nbsp;: </span><span class="tt-val">' + (p.codesPostaux ? p.codesPostaux[0] : '') + '</span></div>',
-        { className: 'commune-tooltip', sticky: true, direction: 'top', offset: [0, -4] }
+        { className: 'commune-tooltip', sticky: false, permanent: false,
+          direction: 'top', offset: [0, -4], interactive: false }
       );
 
-      layer.on('mouseover', function() {
+      layer.on('mouseover', function(e) {
+        if (anyIgnActive()) return;   /* parcelles IGN visibles : rien */
         if (!A.modePlacement && !A.modeDeplace) {
           layer.setStyle({ fillOpacity: 0.20, weight: 2, color: '#002395' });
         }
+        layer.openTooltip(e.latlng);
+      });
+      layer.on('mousemove', function(e) {
+        if (anyIgnActive()) { layer.closeTooltip(); return; }
+        layer.getTooltip() && layer.openTooltip(e.latlng);
       });
       layer.on('mouseout', function() {
-        A.layerCommunes.resetStyle(layer);
+        layer.closeTooltip();
+        if (!anyIgnActive()) {
+          A.layerCommunes.resetStyle(layer);
+        }
       });
 
       /* Clic simple → placement si mode actif */
@@ -863,20 +216,34 @@ function ajouterCommunesGeoJSON() {
       });
     }
   }).addTo(A.carte);
+
+  /* Réactiver pointer-events sur les paths SVG des communes uniquement,
+     pas sur le pane entier — ainsi les éléments HTML au-dessus (légende)
+     reçoivent les clics normalement. */
+  var paneEl = A.carte.getPane('communesPane');
+  if (paneEl) {
+    var svg = paneEl.querySelector('svg');
+    if (svg) svg.style.pointerEvents = 'auto';
+  }
+  /* Fallback : observer l'ajout du SVG si pas encore rendu */
+  setTimeout(function() {
+    var pEl = A.carte.getPane('communesPane');
+    if (pEl) {
+      var s = pEl.querySelector('svg');
+      if (s) s.style.pointerEvents = 'auto';
+    }
+  }, 200);
 }
 
-/* Retourne le style Leaflet par défaut pour les polygones communes. */
 function styleCommuneDefaut() {
   return { color: '#002395', weight: 1, opacity: 0.45, fillColor: '#002395', fillOpacity: 0.04 };
 }
 
-/* Ajoute des marqueurs fixes pour Belfort, Delle et Grandvillars. */
 function ajouterMarqueursPrincipaux() {
   /* Marqueur discret pour le chef-lieu uniquement — sans markers de villes */
   ajouterMarqueur(47.637, 6.863, '#002395', 7, '<b>Belfort</b><br/>Chef-lieu &mdash; DDT 90');
 }
 
-/* Ajoute un CircleMarker léger (repère de ville) avec une popup. */
 function ajouterMarqueur(lat, lng, fill, r, popup) {
   L.circleMarker([lat, lng], {
     radius: r, fillColor: fill, color: '#fff', weight: 2, fillOpacity: .95,
@@ -891,11 +258,14 @@ function ajouterListenersGlobaux() {
   A.carte.on('dblclick', function(e) {
     gererDblClicCarte(e.latlng.lat, e.latlng.lng);
   });
+  /* Masquer le GeoJSON communes quand la couche agriculture IGN est visible */
+  A.carte.on('zoomend', function() {
+    majOpaciteCommunesSelonCouches();
+    majLegende();
+  });
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   GESTION DES CLICS / DOUBLE-CLICS SUR LA CARTE
-   ════════════════════════════════════════════════════════════════════ */
+/* ── CLICS CARTE — placement projet (clic simple) + déplacement (double-clic) */
 
 /* Clic simple : place le projet si mode placement actif */
 function gererClicCarte(lat, lng) {
@@ -920,15 +290,8 @@ function gererDblClicCarte(lat, lng) {
   }
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   PLACEMENT ET DÉPLACEMENT DU PROJET
-   ════════════════════════════════════════════════════════════════════ */
+/* ── PLACEMENT / DÉPLACEMENT DU PROJET ──────────────────────────────────────── */
 
-/**
- * Place ou déplace le marqueur projet.
- * Met à jour A.position, dessine le cercle de superficie,
- * affiche le panneau actions et lance un toast de confirmation.
- */
 function placerProjet(lat, lng) {
   /* Supprimer les couches précédentes */
   if (A.layerProjet) { A.carte.removeLayer(A.layerProjet); A.layerProjet = null; }
@@ -973,10 +336,6 @@ function placerProjet(lat, lng) {
   if (btnPl) btnPl.style.boxShadow = '';
 }
 
-/**
- * Supprime le marqueur, réinitialise A.position et masque
- * toutes les sections de résultats (contacts, checklist, alentours).
- */
 function supprimerProjet() {
   if (A.layerProjet) { A.carte.removeLayer(A.layerProjet); A.layerProjet = null; }
   if (A.layerCercle) { A.carte.removeLayer(A.layerCercle); A.layerCercle = null; }
@@ -996,6 +355,10 @@ function supprimerProjet() {
     alentours.layer = null;
     alentours.resultats = [];
   }
+  /* Désactiver le bouton rapport */
+  A._lastFiltres = null; A._lastZonesResultats = null;
+  var btnRap = document.getElementById('btn-rapport');
+  if (btnRap) { btnRap.disabled = true; btnRap.style.opacity = '.4'; }
 }
 
 /* ── Mode placement (simple clic) ──────────────────────────────── */
@@ -1003,7 +366,6 @@ function togglePlacement() {
   if (A.modePlacement) { desactiverPlacement(); } else { activerPlacement(); }
 }
 
-/* Active le mode clic-pour-placer : curseur crosshair + mise à jour du bouton. */
 function activerPlacement() {
   A.modePlacement = true;
   A.carte.getContainer().style.cursor = 'crosshair';
@@ -1015,7 +377,6 @@ function activerPlacement() {
   document.getElementById('notif-placement').classList.add('on');
 }
 
-/* Désactive le mode placement et restaure l'apparence du bouton. */
 function desactiverPlacement() {
   A.modePlacement = false;
   A.carte.getContainer().style.cursor = '';
@@ -1038,7 +399,6 @@ function activerDeplace() {
   document.getElementById('notif-placement').classList.add('on');
 }
 
-/* Désactive le mode double-clic-pour-déplacer. */
 function desactiverDeplace() {
   A.modeDeplace = false;
   A.carte.getContainer().style.cursor = '';
@@ -1048,9 +408,7 @@ function desactiverDeplace() {
   document.getElementById('notif-placement').classList.remove('on');
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   COUCHES THÉMATIQUES
-   ════════════════════════════════════════════════════════════════════ */
+/* ── COUCHES THÉMATIQUES — contrôles UI, chargement, légende ───────────────── */
 
 /* Génère les boutons de contrôle des couches dans le panneau gauche */
 function genControleCouches() {
@@ -1071,10 +429,7 @@ function genControleCouches() {
       '<span class="layer-check">\u2713</span>';
 
     /* Clic : activer/désactiver la couche sauf si clic sur le ? */
-    btn.addEventListener('click', function(e) {
-      if (e.target.closest('.layer-info')) return;
-      toggleCouche(themeId, btn);
-    });
+    btn.addEventListener('click',function(e){if(e.target.closest('.layer-info'))return;var st=COUCHE_STYLES[themeId];if(st&&st.groupe)toggleCoucheGroupe(themeId,st.groupe,btn);else toggleCouche(themeId,btn);});
 
     conteneur.appendChild(btn);
   });
@@ -1114,11 +469,8 @@ function genControleCouches() {
   });
 }
 
-/**
- * Active ou désactive une couche thématique Atlas sur la carte.
- * @param {string}      themeId  Clé dans COUCHE_STYLES et COUCHES_DATA
- * @param {HTMLElement} btn      Bouton cliqué (classe "active" basculée)
- */
+function toggleCoucheGroupe(gId,membres,btn){var on=A.couchesActives.has(gId);if(on){membres.forEach(function(id){if(A.couches[id]){A.carte.removeLayer(A.couches[id]);delete A.couches[id];}A.couchesActives.delete(id);});A.couchesActives.delete(gId);btn.classList.remove('actif');btn.title='';}else{membres.forEach(function(id){chargerCouche(id);A.couchesActives.add(id);});A.couchesActives.add(gId);btn.classList.add('actif');var d0=COUCHES_IGN[membres[0]];if(d0&&d0.minZoom&&A.carte.getZoom()<d0.minZoom)afficherToastZoom('?? '+(COUCHE_STYLES[gId]?COUCHE_STYLES[gId].label:gId)+' — zoom '+d0.minZoom+'+',d0.minZoom);}majOpaciteCommunesSelonCouches();majLegende();}
+
 function toggleCouche(themeId, btn) {
   if (A.couchesActives.has(themeId)) {
     /* Désactiver : retirer de la carte */
@@ -1128,24 +480,84 @@ function toggleCouche(themeId, btn) {
     }
     A.couchesActives.delete(themeId);
     btn.classList.remove('actif');
+    btn.title = '';
+    majOpaciteCommunesSelonCouches();
     majLegende();
   } else {
     /* Activer : charger et afficher */
     chargerCouche(themeId);
     A.couchesActives.add(themeId);
     btn.classList.add('actif');
+    /* Avertir si zoom insuffisant */
+    var igndef = COUCHES_IGN[themeId];
+    if (igndef && igndef.minZoom && A.carte.getZoom() < igndef.minZoom) {
+      btn.title = 'Zoomez jusqu\'au niveau ' + igndef.minZoom + '+ pour voir cette couche';
+      var zMin = igndef.minZoom;
+      var lbl  = COUCHE_STYLES[themeId] ? COUCHE_STYLES[themeId].label : themeId;
+      afficherToastZoom('\uD83D\uDD0D ' + lbl + ' — cliquez ici pour zoomer au niveau ' + zMin, zMin);
+    }
+    /* Atténuer les limites communes GeoJSON si la couche IGN en affiche déjà */
+    majOpaciteCommunesSelonCouches();
     majLegende();
   }
 }
 
 /**
- * Charge la couche GeoJSON depuis COUCHES_DATA et l'ajoute à la carte.
- * Sans effet si déjà chargée.
+ * Charge une couche thématique sur la carte.
+ * 1. Flux WMTS Géoplateforme (COUCHES_IGN) si l'entrée existe.
+ * 2. Fallback GeoJSON local (COUCHES_DATA) sinon.
+ * ⚠ agriculture et cadastre : IGN-only, pas de fallback GeoJSON.
+ * @param {string} themeId — clé de COUCHE_STYLES
  */
-function chargerCouche(themeId) {
-  var data  = COUCHES_DATA[themeId];
-  var style = COUCHE_STYLES[themeId];
-  if (!data || !style) return;
+function chargerCouche(themeId){
+  var style=COUCHE_STYLES[themeId];
+  if(!style){var p={monuments_historiques:'patrimoine',archeologie_preventive:'patrimoine',transport_routier:'mobilite',transport_ferroviaire:'mobilite'};style=COUCHE_STYLES[p[themeId]]||null;if(!style)return;}
+
+  /* ── 1. Flux WMTS Géoplateforme ────────────────────────────────────── */
+  var igndef = COUCHES_IGN[themeId];
+  if (igndef && igndef.layer) {
+    var url = GPF_WMTS +
+      '&LAYER=' + igndef.layer +
+      '&FORMAT=' + (igndef.format || 'image/png');
+
+    var layer;if(igndef.wms){layer=L.tileLayer.wms('https://data.geopf.fr/wms-r',{layers:igndef.layer,format:'image/png',transparent:true,opacity:igndef.opacity||0.75,minZoom:igndef.minZoom||6,maxZoom:19,attribution:'<a href="https://geoservices.ign.fr/" target="_blank">IGN-F</a>'});}else{layer=L.tileLayer(url,{minZoom:igndef.minZoom||6,maxZoom:19,opacity:igndef.opacity||0.75,attribution:'<a href="https://geoservices.ign.fr/" target="_blank">IGN-F / G&eacute;oplateforme</a>',crossOrigin:true});}
+
+    A.couches[themeId] = layer;
+    layer.addTo(A.carte);
+
+    /* Erreur de chargement → basculer sur GeoJSON local
+       SAUF pour cadastre et agriculture : ces couches n'ont pas de GeoJSON atlas
+       (le GeoJSON 'agriculture' est l'atlas DDT, pas le RPG) */
+    var noFallback = (themeId === 'cadastre' || themeId === 'agriculture');
+    layer.on('tileerror', function() {
+      if (noFallback) {
+        console.warn('[DDT90] Couche IGN indisponible pour "' + themeId + '" (pas de fallback GeoJSON).');
+        return;
+      }
+      if (!A._ignerr) { A._ignerr = {}; }
+      if (!A._ignerr[themeId]) {
+        A._ignerr[themeId] = true;
+        console.warn('[DDT90] Couche IGN indisponible pour "' + themeId + '", bascule sur GeoJSON local.');
+        A.carte.removeLayer(layer);
+        delete A.couches[themeId];
+        chargerCoucheGeoJSON(themeId, style);
+      }
+    });
+
+    layer.on('click', function(e) { gererClicCarte(e.latlng.lat, e.latlng.lng); });
+    return;
+  }
+
+  /* ── 2. Fallback GeoJSON local ─────────────────────────────────────── */
+  chargerCoucheGeoJSON(themeId, style);
+}
+
+/**
+ * Charge la couche GeoJSON locale (COUCHES_DATA) — fallback si IGN indisponible.
+ */
+function chargerCoucheGeoJSON(themeId, style) {
+  var data = COUCHES_DATA[themeId];
+  if (!data) return;
 
   A.couches[themeId] = L.geoJSON(data, {
     style: function(feature) {
@@ -1172,7 +584,6 @@ function chargerCouche(themeId) {
           { className: 'commune-tooltip', sticky: true }
         );
       }
-      /* Propagation des clics pour que le placement fonctionne même sur les couches */
       layer.on('click',    function(e) { gererClicCarte(e.latlng.lat, e.latlng.lng); });
       layer.on('dblclick', function(e) { L.DomEvent.stopPropagation(e); gererDblClicCarte(e.latlng.lat, e.latlng.lng); });
     }
@@ -1180,30 +591,213 @@ function chargerCouche(themeId) {
 }
 
 /* Mise à jour de la légende en fonction des couches actives */
+/**
+ * Atténue ou masque les limites communes GeoJSON locales
+ * quand une couche Géoplateforme IGN affiche déjà ses propres limites,
+ */
+/**
+ * Masque le GeoJSON communes quand la couche Parcellaire Express (agriculture)
+ * est active ET que le zoom est >= 13 (les tuiles IGN sont alors visibles).
+ * Restaure le style par défaut dans tous les autres cas.
+ */
+function majOpaciteCommunesSelonCouches() {
+  if (!A.layerCommunes) return;
+
+  var zoom      = A.carte ? A.carte.getZoom() : 0;
+  var rpgDef    = COUCHES_IGN['agriculture'];
+  var rpgMin    = rpgDef ? (rpgDef.minZoom || 10) : 10;
+  var cadastreDef = COUCHES_IGN['cadastre'];
+  var cadastreMin = cadastreDef ? (cadastreDef.minZoom || 13) : 13;
+
+  /* Couche cadastre visible (zoom >= 13) : masquer communes complètement
+     (les tuiles PCI affichent déjà les limites parcellaires) */
+  var cadastreVisible = A.couchesActives.has('cadastre') && zoom >= cadastreMin;
+
+  /* Couche RPG agriculture active (à n'importe quel zoom) :
+     garder l'outline communes mais masquer le fond pour éviter l'overlap
+     avec les couleurs de cultures */
+  var rpgActif = A.couchesActives.has('agriculture');
+
+  if (cadastreVisible) {
+    /* Cadastre visible : masquer complètement */
+    A.layerCommunes.setStyle({
+      color: '#002395', weight: 0, opacity: 0,
+      fillColor: '#002395', fillOpacity: 0,
+    });
+  } else if (rpgActif) {
+    /* RPG actif (peu importe le zoom) : conserver l'outline, pas de fond
+       pour que les couleurs de cultures soient lisibles */
+    A.layerCommunes.setStyle({
+      color: '#002395', weight: 1, opacity: 0.45,
+      fillColor: '#002395', fillOpacity: 0,
+    });
+  } else {
+    /* Aucune couche IGN qui nécessite un ajustement */
+    A.layerCommunes.setStyle(styleCommuneDefaut());
+  }
+}
+
+/**
+ * Met à jour la légende carte en fonction des couches actives.
+ * Distingue couches WMTS Géoplateforme (symbole tuile) et GeoJSON locaux (symbole géom).
+ * Indique le niveau de zoom minimum si la couche n'est pas encore visible.
+ * Affiche la légende RPG détaillée si la couche agriculture est active.
+ */
 function majLegende() {
   var conteneur = document.getElementById('legende-couches');
   conteneur.innerHTML = '';
 
+  if (A.couchesActives.size === 0) return;
+
+  /* Séparateur entre les items fixes et les couches thématiques */
+  var sep = document.createElement('div');
+  sep.className = 'leg-sep';
+  conteneur.appendChild(sep);
+
+  /* Légende RPG détaillée si couche agriculture active */
+  if (A.couchesActives.has('agriculture')) {
+    var zoom = A.carte ? A.carte.getZoom() : 0;
+    var rpgDef = COUCHES_IGN['agriculture'];
+    var rpgMin = rpgDef ? (rpgDef.minZoom || 10) : 10;
+
+    var rpgEl = document.createElement('div');
+    rpgEl.className = 'leg-rpg-block';
+
+    if (zoom < rpgMin) {
+      /* Pas encore visible : afficher badge zoom cliquable */
+      rpgEl.innerHTML =
+        '<div class="leg-section">RPG 2024 — Cultures PAC' +
+          ' <span class="leg-ign-badge">IGN</span>' +
+          ' <span class="leg-zoom-warn" style="cursor:pointer;" title="Cliquer pour zoomer">&#x1F50D; Zoom ' + rpgMin + '+</span>' +
+        '</div>';
+      var warnBadge = rpgEl.querySelector('.leg-zoom-warn');
+      if (warnBadge) {
+        warnBadge.addEventListener('click', function(e) {
+          e.stopPropagation();
+          A.carte.setZoom(rpgMin);
+        });
+      }
+    } else {
+      /* Visible : afficher la légende couleurs cultures */
+      var cultures = [
+        { c: '#ffffb2', l: 'Blé tendre' },
+        { c: '#31a354', l: 'Maïs grain et ensilage' },
+        { c: '#addd8e', l: 'Orge' },
+        { c: '#f7fcb9', l: 'Autres céréales' },
+        { c: '#ffeda0', l: 'Colza' },
+        { c: '#feb24c', l: 'Tournesol' },
+        { c: '#fd8d3c', l: 'Autre oléagineux' },
+        { c: '#fc4e2a', l: 'Protéagineux' },
+        { c: '#8c510a', l: 'Plantes à fibres' },
+        { c: '#bf812d', l: 'Semences' },
+        { c: '#c6dbef', l: 'Gel (surface gelée)' },
+        { c: '#9ecae1', l: 'Gel industriel' },
+        { c: '#deebf7', l: 'Autres gels' },
+        { c: '#e0ecf4', l: 'Riz' },
+        { c: '#f768a1', l: 'Légumineuses à grains' },
+        { c: '#74c476', l: 'Fourrage' },
+        { c: '#a1d99b', l: 'Estives et landes' },
+        { c: '#c7e9c0', l: 'Prairies permanentes' },
+        { c: '#e5f5e0', l: 'Prairies temporaires' },
+        { c: '#d73027', l: 'Vergers' },
+        { c: '#e377c2', l: 'Vignes' },
+        { c: '#2ca02c', l: 'Fruit à coque' },
+        { c: '#bcbd22', l: 'Oliviers' },
+        { c: '#17becf', l: 'Autres cultures industrielles' },
+        { c: '#ff9896', l: 'Légumes ou fleurs' },
+        { c: '#1f77b4', l: 'Canne à sucre' },
+        { c: '#98df8a', l: 'Arboriculture' },
+        { c: '#aec7e8', l: 'Divers' },
+        { c: '#d9d9d9', l: 'Non disponible' },
+      ];
+      var rows = cultures.map(function(cu) {
+        return '<div class="leg-rpg-row">' +
+          '<div class="leg-rpg-color" style="background:' + cu.c + ';"></div>' +
+          '<span class="leg-label">' + cu.l + '</span>' +
+          '</div>';
+      }).join('');
+
+      rpgEl.innerHTML =
+        '<div class="leg-section">RPG 2024 — Cultures PAC' +
+          ' <span class="leg-ign-badge">IGN</span>' +
+        '</div>' +
+        '<div class="leg-rpg-list">' + rows + '</div>';
+    }
+
+    /* Clic sur le bloc (hors badge zoom) → désactiver la couche */
+    rpgEl.title = 'Cliquer pour désactiver';
+    rpgEl.style.cursor = 'pointer';
+    rpgEl.addEventListener('click', function() {
+      var btn = document.querySelector('.layer-toggle[data-id="agriculture"]');
+      if (btn) toggleCouche('agriculture', btn);
+    });
+
+    conteneur.appendChild(rpgEl);
+  }
+
+  var zoomActuel = A.carte ? A.carte.getZoom() : 12;
+
   A.couchesActives.forEach(function(themeId) {
-    var style = COUCHE_STYLES[themeId];
+    var style  = COUCHE_STYLES[themeId];
     if (!style) return;
+    var igndef = COUCHES_IGN[themeId];
+
     var item = document.createElement('div');
     item.className = 'leg-item';
-    item.innerHTML =
-      '<div class="leg-color" style="background:' + style.swatch + ';"></div>' +
-      '<span>' + style.label + '</span>';
+
+    /* Symbole selon le type de source */
+    var symbole;
+    if (igndef && igndef.layer) {
+      /* Couche Géoplateforme IGN — icône tuile */
+      symbole = '<div class="leg-ign-tile" style="border-color:' + style.swatch + ';">'
+              + '<div class="leg-ign-inner" style="background:' + style.swatch + ';opacity:.35;"></div>'
+              + '</div>';
+    } else {
+      /* GeoJSON local — barre de couleur */
+      symbole = '<div class="leg-color" style="background:' + style.swatch + ';"></div>';
+    }
+
+    /* Avertissement zoom si couche non visible au zoom actuel */
+    var hasZoomWarn = igndef && igndef.minZoom && zoomActuel < igndef.minZoom;
+    var zMin = hasZoomWarn ? igndef.minZoom : 0;
+    var zoomWarn = hasZoomWarn
+      ? ' <span class="leg-zoom-warn" data-minzoom="' + zMin + '" title="Cliquer pour zoomer au niveau ' + zMin + '" style="cursor:pointer;">'
+        + '&#x1F50D; Zoom ' + zMin + '+</span>'
+      : '';
+
+    /* Badge IGN */
+    var badge = igndef
+      ? ' <span class="leg-ign-badge">IGN</span>'
+      : '';
+
+    item.innerHTML = symbole
+      + '<span class="leg-label">' + style.label + badge + zoomWarn + '</span>';
+
+    /* Clic sur le badge zoom → zoomer (stoppe la propagation vers l'item parent) */
+    if (hasZoomWarn) {
+      var warnEl = item.querySelector('.leg-zoom-warn');
+      if (warnEl) {
+        warnEl.addEventListener('click', function(e) {
+          e.stopPropagation();
+          A.carte.setZoom(zMin);
+        });
+      }
+    }
+
+    /* Clic sur l'item (hors badge zoom) → désactiver la couche */
+    item.title = 'Cliquer pour désactiver';
+    item.style.cursor = 'pointer';
+    item.addEventListener('click', function() {
+      var btn = document.querySelector('.layer-toggle[data-id="' + themeId + '"]');
+      if (btn) toggleCouche(themeId, btn);
+    });
+
     conteneur.appendChild(item);
   });
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   SUPERFICIE
-   ════════════════════════════════════════════════════════════════════ */
+/* ── SUPERFICIE — calcul ha + cercle proportionnel sur la carte ────────────── */
 
-/**
- * Recalcule A.superficieHa depuis le champ de saisie et l'unité sélectionnée,
- * puis redessine le cercle sur la carte si un projet est déjà placé.
- */
 function majSuperficie() {
   var val   = parseFloat(document.getElementById('inp-sup').value);
   var unite = document.getElementById('sel-unite').value;
@@ -1230,11 +824,8 @@ function majSuperficie() {
   if (A.position) placerProjet(A.position.lat, A.position.lng);
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   CONTRÔLES DU PANNEAU GAUCHE
-   ════════════════════════════════════════════════════════════════════ */
+/* ── PANNEAU GAUCHE — boutons types, taille, badges thèmes ─────────────────── */
 
-/* Génère les 8 boutons de type de projet dans #grille-types. */
 function genBoutons() {
   var grille = document.getElementById('grille-types');
   grille.innerHTML = '';
@@ -1248,10 +839,6 @@ function genBoutons() {
   });
 }
 
-/**
- * Sélectionne un type de projet, met à jour A.typeProjet, affiche le badge
- * dans le header, réinitialise le sous-type et rafraîchit les sous-types.
- */
 function selType(btn) {
   document.querySelectorAll('.btn-type').forEach(function(b){ b.classList.remove('actif'); });
   btn.classList.add('actif');
@@ -1261,16 +848,12 @@ function selType(btn) {
     document.getElementById('hdr-badge-txt').innerHTML = t.ico + '&nbsp;' + t.label;
     document.getElementById('hdr-badge').style.display = 'flex';
   }
-  /* Réinitialiser le sous-type et afficher les sous-types du nouveau type */
+  /* Réinitialiser le sous-type */
   A.sousType = null;
   document.getElementById('stype-desc').classList.remove('on');
   afficherSousTypes(A.typeProjet);
 }
 
-/**
- * Met à jour A.taille (1–4) depuis le slider et affiche le nom
- * et la description de l'envergure réglementaire correspondante.
- */
 function majTaille(val) {
   A.taille = parseInt(val);
   var t = TAILLES[A.taille];
@@ -1279,7 +862,6 @@ function majTaille(val) {
   document.getElementById('slider-taille').value = A.taille;
 }
 
-/* Génère les 4 badges de filtre thématique dans #grille-themes. */
 function genBadgesThemes() {
   var grille = document.getElementById('grille-themes');
   grille.innerHTML = '';
@@ -1301,66 +883,89 @@ function genBadgesThemes() {
   });
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   RENDU DES ENJEUX — 4 accordéons thématiques
-   ════════════════════════════════════════════════════════════════════ */
+/* ── ENJEUX — rendu des 4 accordéons thématiques + AXES_META ───────────────── */
 
 /* Méta constante des 4 axes (couleurs, icônes, labels) */
-var AXES_META = {
-  environnement: {
-    label: 'Environnement',
-    ico:   '\uD83C\uDF33',   /* 🌳 */
-    color: '#15803d',
-    bg:    '#f0fdf4',
-    border:'#86efac',
-    dark_bg: '#052e16',
-  },
-  economique: {
-    label: 'Economique',
-    ico:   '\uD83D\uDCB0',   /* 💰 */
-    color: '#7c3aed',
-    bg:    '#f5f3ff',
-    border:'#c4b5fd',
-    dark_bg: '#1e1b4b',
-  },
-  politique: {
-    label: 'Politique',
-    ico:   '\uD83C\uDFDB',   /* 🏛 */
-    color: '#92400e',
-    bg:    '#fef9c3',
-    border:'#fde68a',
-    dark_bg: '#1c1006',
-  },
-  social: {
-    label: 'Social',
-    ico:   '\uD83D\uDC65',   /* 👥 */
-    color: '#be123c',
-    bg:    '#fff1f2',
-    border:'#fda4af',
-    dark_bg: '#1f0010',
-  },
-};
+/* ══════════════════════════════════════════════════════════════════════════════
+   NOUVEAU SYSTÈME D'ENJEUX — 5 catégories de la mindmap DDT 90
+   Remplace les 4 axes environnement/économique/politique/social
+   ══════════════════════════════════════════════════════════════════════════════ */
 
-/* ── Construit les 4 accordéons après analyse ── */
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   BASE DE DONNÉES ENJEUX — structurée par catégorie mindmap
+   Chaque enjeu possède : id, nom, ico, niv (eleve/moyen/faible),
+   tmin (1-4), types (null=tous), zones_requises (null=toujours),
+   et les sous-éléments de la mindmap par catégorie
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   RENDU DES ACCORDÉONS — 5 catégories mindmap
+   Remplace rendreAccordeons (4 axes) par rendreAccordeonsMindmap
+   ══════════════════════════════════════════════════════════════════════════════ */
+
 function rendreAccordeons(filtres, conteneur) {
-  /* NE PAS réinitialiser conteneur.innerHTML — l'accordéon zones
-     est déjà inséré par rendreAccordeonZones, on ajoute après lui. */
+  /* Les enjeux ENJEUX_MINDMAP du type de projet */
+  var enjeuxMindmap = (ENJEUX_MINDMAP[A.typeProjet] || []).filter(function(e) {
+    return e.tmin <= A.taille;
+  });
 
-  var axeIds = ['environnement', 'economique', 'politique', 'social'];
-  var niveaux = { eleve: 'Elev\u00e9', moyen: 'Moyen', faible: 'Faible' };
+  /* Fusionner avec les enjeux contextuels (filtres sans contexte_zone) qui ont
+     des axes mindmap — on les intègre dans les catégories correspondantes */
 
-  axeIds.forEach(function(axeId, idx) {
+  var axeIds = ['economique', 'cartographie', 'social', 'environnemental', 'politique', 'prevention'];
+  var niveaux = { eleve: 'Élevé', moyen: 'Moyen', faible: 'Faible' };
+
+  axeIds.forEach(function(axeId) {
+    if (A.themesActifs && A.themesActifs.size > 0) {
+      /* Mapping ancien → nouveau pour la compatibilité avec le filtre thèmes */
+      var mappingThemes = {
+        economique:      'economique',
+        cartographie:    'environnement',
+        social:          'social',
+        environnemental: 'environnement',
+        politique:       'politique',
+        prevention:      'social',
+      };
+      var ancienAxe = mappingThemes[axeId];
+      if (ancienAxe && !A.themesActifs.has(ancienAxe)) return;
+    }
+
     var meta = AXES_META[axeId];
 
-    /* Collecter tous les items pour cet axe */
+    /* Collecter les items ayant des données pour cet axe */
     var items = [];
-    filtres.forEach(function(enjeu) {
+
+    /* 1. Enjeux mindmap du type de projet */
+    enjeuxMindmap.forEach(function(enjeu) {
       var axe = enjeu.axes && enjeu.axes[axeId];
       if (!axe) return;
-      items.push({ enjeu: enjeu, axe: axe });
+      items.push({ enjeu: enjeu, axe: axe, source: 'mindmap' });
+    });
+
+    /* 2. Enjeux du filtre standard (ENJEUX[typeProjet]) qui ont cet axe */
+    filtres.forEach(function(enjeu) {
+      if (enjeu.contexte_zone || enjeu._agri_ctx || enjeu._transport_ctx) return;
+      /* Mappage des anciens axes vers les nouvelles catégories */
+      var ancienAxeId = axeId === 'environnemental' ? 'environnement' : axeId;
+      var axe = enjeu.axes && enjeu.axes[ancienAxeId];
+      if (!axe) return;
+      /* Éviter les doublons avec les enjeux mindmap */
+      var dejaDans = items.some(function(it){ return it.enjeu.id === enjeu.id; });
+      if (dejaDans) return;
+      items.push({ enjeu: enjeu, axe: axe, source: 'standard' });
     });
 
     if (items.length === 0) return;
+
+    /* Tri élevé → moyen → faible */
+    var ordNiv = { eleve: 0, moyen: 1, faible: 2 };
+    items.sort(function(a, b) {
+      var oa = ordNiv[a.enjeu.niv] !== undefined ? ordNiv[a.enjeu.niv] : 2;
+      var ob = ordNiv[b.enjeu.niv] !== undefined ? ordNiv[b.enjeu.niv] : 2;
+      return oa - ob;
+    });
 
     /* Wrapper accordéon */
     var accord = document.createElement('div');
@@ -1378,16 +983,10 @@ function rendreAccordeons(filtres, conteneur) {
       '<span class="accord-count">' + items.length + ' sujet' + (items.length > 1 ? 's' : '') + '</span>' +
       '<span class="accord-chev">&#x25BC;</span>';
 
-    /* Corps dépliable */
+    /* Corps */
     var body = document.createElement('div');
     body.className = 'accord-body';
 
-    /* Ouvrir le premier accordéon par défaut */
-    if (idx === 0) {
-      accord.classList.add('ouvert');
-    }
-
-    /* Chaque enjeu = une fiche dans l'accordéon */
     items.forEach(function(item) {
       var enjeu = item.enjeu;
       var axe   = item.axe;
@@ -1395,23 +994,33 @@ function rendreAccordeons(filtres, conteneur) {
       var fiche = document.createElement('div');
       fiche.className = 'axe-fiche';
 
-      /* En-tête de la fiche */
       var ficheHead = document.createElement('div');
       ficheHead.className = 'axe-fiche-head';
       ficheHead.innerHTML =
-        '<span class="axe-fiche-ico">' + (enjeu.ico || '&#x26A0;') + '</span>' +
+        '<span class="axe-fiche-ico">' + (enjeu.ico || '⚠') + '</span>' +
         '<span class="axe-fiche-nom">' + enjeu.nom + '</span>' +
         '<span class="niv-badge n-' + enjeu.niv + '">' + (niveaux[enjeu.niv] || enjeu.niv) + '</span>' +
         '<span class="axe-fiche-chev">&#x25BA;</span>';
 
-      /* Corps de la fiche */
       var ficheBody = document.createElement('div');
       ficheBody.className = 'axe-fiche-body';
 
+      /* Éléments de la mindmap */
+      if (axe.elements && axe.elements.length) {
+        var elHtml = axe.elements.map(function(el) {
+          return '<li><span class="axe-bullet">◆</span>' + el + '</li>';
+        }).join('');
+        ficheBody.innerHTML +=
+          '<div class="fiche-section mindmap-elements">' +
+            '<div class="fiche-section-titre">Éléments clés</div>' +
+            '<ul class="axe-list">' + elHtml + '</ul>' +
+          '</div>';
+      }
+
       /* Facteurs */
       if (axe.facteurs && axe.facteurs.length) {
-        var fHtml = axe.facteurs.map(function(f){
-          return '<li><span class="axe-bullet">&#x2022;</span>' + f + '</li>';
+        var fHtml = axe.facteurs.map(function(f) {
+          return '<li><span class="axe-bullet">•</span>' + f + '</li>';
         }).join('');
         ficheBody.innerHTML +=
           '<div class="fiche-section">' +
@@ -1422,55 +1031,55 @@ function rendreAccordeons(filtres, conteneur) {
 
       /* Conséquences */
       if (axe.consequences && axe.consequences.length) {
-        var cHtml = axe.consequences.map(function(c){
-          return '<li><span class="axe-bullet axe-bullet-arrow">&#x2192;</span>' + c + '</li>';
+        var cHtml = axe.consequences.map(function(c) {
+          return '<li><span class="axe-bullet axe-bullet-arrow">→</span>' + c + '</li>';
         }).join('');
         ficheBody.innerHTML +=
           '<div class="fiche-section">' +
-            '<div class="fiche-section-titre cons">Cons\u00e9quences</div>' +
+            '<div class="fiche-section-titre cons">Conséquences</div>' +
             '<ul class="axe-list">' + cHtml + '</ul>' +
           '</div>';
       }
 
-      /* Actions recommandées */
-      if (enjeu.actions && enjeu.actions.length) {
-        var aHtml = enjeu.actions.map(function(a){
-          return '<li><span class="axe-bullet action-bullet">&#x2713;</span>' + a + '</li>';
+      /* Actions */
+      if (axe.actions && axe.actions.length) {
+        var aHtml = axe.actions.map(function(a) {
+          return '<li><span class="axe-bullet action-bullet">✓</span>' + a + '</li>';
         }).join('');
         ficheBody.innerHTML +=
           '<div class="fiche-section actions">' +
-            '<div class="fiche-section-titre action">Actions recommand\u00e9es</div>' +
+            '<div class="fiche-section-titre action">Actions recommandées</div>' +
             '<ul class="axe-list">' + aHtml + '</ul>' +
           '</div>';
       }
 
-      /* Références Atlas */
+      /* Refs Atlas */
       if (enjeu.refs && enjeu.refs.length) {
-        var refsHtml = enjeu.refs.map(function(r){
-          return '<span class="enjeu-lien" data-id="' + enjeu.id + '">&#x1F5FA; ' + r.n + ' \u2014 ' + r.t + '</span>';
+        var refsHtml = enjeu.refs.map(function(r) {
+          return '<span class="enjeu-lien" data-id="' + enjeu.id + '">🗺 ' + r.n + ' — ' + r.t + '</span>';
         }).join('');
         ficheBody.innerHTML += '<div class="enjeu-liens" style="margin-top:8px;">' + refsHtml + '</div>';
       }
 
-      /* Toggle fiche */
       ficheHead.addEventListener('click', function() {
         fiche.classList.toggle('ouvert');
       });
 
-      /* Modale au clic sur un lien Atlas */
-      ficheBody.querySelectorAll('.enjeu-lien').forEach(function(lien) {
-        lien.addEventListener('click', function(ev) {
-          ev.stopPropagation();
-          ouvrirModale(lien.dataset.id);
+      /* Clic sur lien Atlas */
+      ficheBody.querySelectorAll && setTimeout(function() {
+        ficheBody.querySelectorAll('.enjeu-lien').forEach(function(lien) {
+          lien.addEventListener('click', function() {
+            var atlasId = lien.dataset.id;
+            ouvrirModale && ouvrirModale(atlasId);
+          });
         });
-      });
+      }, 0);
 
       fiche.appendChild(ficheHead);
       fiche.appendChild(ficheBody);
       body.appendChild(fiche);
     });
 
-    /* Toggle accordéon */
     btn.addEventListener('click', function() {
       accord.classList.toggle('ouvert');
     });
@@ -1481,14 +1090,8 @@ function rendreAccordeons(filtres, conteneur) {
   });
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   MODALE
-   ════════════════════════════════════════════════════════════════════ */
+/* ── MODALE — fiche détaillée d'un enjeu (axes, actions, références) ──────── */
 
-/**
- * Ouvre la modale de fiche détaillée pour un enjeu.
- * @param {string} id  Identifiant de l'enjeu (cherché dans ENJEUX + ENJEUX_ZONES)
- */
 function ouvrirModale(id) {
   var enjeu = null;
   var listes = Object.values(ENJEUX);
@@ -1533,11 +1136,6 @@ function ouvrirModale(id) {
   document.getElementById('modale-bg').classList.add('on');
 }
 
-/**
- * Ferme la modale.
- * @param {Event}   evt    Clic sur le fond (ferme si hors contenu)
- * @param {boolean} force  true = fermeture inconditionnelle
- */
 function fermerModale(evt, force) {
   if (force || (evt && evt.target.id === 'modale-bg')) {
     document.getElementById('modale-bg').classList.remove('on');
@@ -1548,419 +1146,11 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') fermerModale(null, true);
 });
 
-/* ════════════════════════════════════════════════════════════════════
-   BASE DE DONNEES DES CONTACTS
-   Organisee par : groupe > contacts individuels
-   Chaque contact peut etre filtre par type de projet (types: [])
-   et par taille minimale (tmin: 1-4).
-   priorite : 'obligatoire' | 'recommande' | 'optionnel'
-   ════════════════════════════════════════════════════════════════════ */
-var CONTACTS_DB = {
+/* ── CONTACTS_DB — 8 groupes, ~24 contacts DDT 90 et partenaires
+   { id, nom, role, tel, email, url, types[], zones[], priorite }     */
 
-  /* ── SERVICES DE L'ETAT ──────────────────────────────────────── */
-  etat: {
-    label: 'Services de l\'Etat',
-    ico:   '&#x1F3DB;',
-    contacts: [
-      {
-        id:        'ddt90',
-        nom:       'DDT 90 — Direction Departementale des Territoires',
-        role:      'Service instructeur : urbanisme, agriculture, environnement, risques. Interlocuteur principal pour tout projet sur le Territoire de Belfort.',
-        priorite:  'obligatoire',
-        types:     ['logement','zae','equipement','energie','transport','agriculture','nature','friche'],
-        tmin:      1,
-        tel:       '03 84 58 86 00',
-        email:     'ddt@territoire-de-belfort.gouv.fr',
-        adresse:   '8 place de la Revolution Francaise, 90000 Belfort',
-        web:       'https://www.territoire-de-belfort.gouv.fr',
-        horaires:  'Lun-Ven 8h30-12h00 / 13h30-16h00',
-        note:      'Contacter le service Urbanisme et Habitat (SUH) pour les projets de construction, le service Environnement pour les projets sensibles, le service Agriculture pour les projets agricoles.',
-      },
-      {
-        id:        'prefet90',
-        nom:       'Prefecture du Territoire de Belfort',
-        role:      'Autorite prefectorale : enquetes publiques, declarations d\'utilite publique, actes d\'urbanisme en zone RNU, coordination des services de l\'Etat.',
-        priorite:  'recommande',
-        types:     ['logement','zae','equipement','energie','transport','friche'],
-        tmin:      2,
-        tel:       '03 84 98 11 11',
-        email:     'contact@territoire-de-belfort.gouv.fr',
-        adresse:   '1 rue de la Prefecture, 90020 Belfort Cedex',
-        web:       'https://www.territoire-de-belfort.gouv.fr/prefecture',
-        horaires:  'Lun-Ven 8h30-12h00 / 13h30-16h30',
-        note:      '[PLACEHOLDER] Service juridique et urbanisme.',
-      },
-      {
-        id:        'udap90',
-        nom:       'UDAP 90 — Architecte des Batiments de France',
-        role:      'Avis sur les projets en perimetre de monument historique (500 m) et en site classe/inscrit. Obligatoire pour tout projet dans un secteur protege.',
-        priorite:  'obligatoire',
-        types:     ['logement','zae','equipement','energie','patrimoine'],
-        tmin:      1,
-        tel:       '03 84 28 70 01',
-        email:     'udap-90@culture.gouv.fr',
-        adresse:   '[PLACEHOLDER] 90000 Belfort',
-        web:       'https://www.culture.gouv.fr/Regions/DRAC-Bourgogne-Franche-Comte',
-        horaires:  '[PLACEHOLDER] Sur rendez-vous',
-        note:      'Contacter en amont si le projet est situe a moins de 500 m d\'un monument historique classe ou inscrit.',
-      },
-      {
-        id:        'ars',
-        nom:       'ARS BFC — Agence Regionale de Sante',
-        role:      'Avis sanitaire : etablissements de sante, captages AEP, assainissement, radon dans les ERP, risques sanitaires environnementaux.',
-        priorite:  'recommande',
-        types:     ['equipement','logement','nature'],
-        tmin:      1,
-        tel:       '03 80 41 98 98',
-        email:     'ars-bfc-dt90@ars.sante.fr',
-        adresse:   '[PLACEHOLDER] 90000 Belfort',
-        web:       'https://www.bourgogne-franche-comte.ars.sante.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Consultation obligatoire pour les etablissements de sante et les projets impactant les captages AEP.',
-      },
-    ]
-  },
 
-  /* ── INTERCOMMUNALITES ───────────────────────────────────────── */
-  epci: {
-    label: 'Intercommunalites',
-    ico:   '&#x1F3D8;',
-    contacts: [
-      {
-        id:        'gbca',
-        nom:       'Grand Belfort Communaute d\'Agglomeration (GBCA)',
-        role:      'Competences : urbanisme (PLU), economie, habitat, transports, environnement. Regroupe Belfort et 49 communes — 73% de la population du 90.',
-        priorite:  'obligatoire',
-        types:     ['logement','zae','equipement','energie','transport','friche'],
-        tmin:      1,
-        tel:       '03 84 90 72 00',
-        email:     'contact@grandbelfort.fr',
-        adresse:   '1 rue Georges Pompidou, BP 10 649, 90020 Belfort Cedex',
-        web:       'https://www.grandbelfort.fr',
-        horaires:  'Lun-Ven 8h30-12h00 / 13h30-17h00',
-        note:      'Interlocuteur pour les projets situes dans les 50 communes de GBCA. Contacter le service Urbanisme pour les PLU et le service Developpement Economique pour les ZAE.',
-      },
-      {
-        id:        'ccvs',
-        nom:       'Communaute de Communes des Vosges du Sud (CCVS)',
-        role:      'Regroupe 22 communes au nord du departement (Giromagny, Rougegoutte...). PLUi en cours d\'elaboration. Competences : economie locale, tourisme, voirie.',
-        priorite:  'recommande',
-        types:     ['logement','zae','equipement','agriculture','nature'],
-        tmin:      1,
-        tel:       '03 84 29 14 00',
-        email:     '[PLACEHOLDER]@vosges-du-sud.fr',
-        adresse:   'Mairie de Giromagny, 4 rue de l\'Hotel de Ville, 90200 Giromagny',
-        web:       'https://www.ccvosgesdu-sud.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'PLUi CCVS en cours d\'elaboration (2025). Contacter pour verifier les implications sur le zonage futur.',
-      },
-      {
-        id:        'ccst',
-        nom:       'Communaute de Communes du Sud Territoire (CCST)',
-        role:      'Regroupe les communes du sud (Delle, Beaucourt, Grandvillars...). Programme agroecologique "L\'Eau d\'Ici". Competences : economie, transports, habitat.',
-        priorite:  'recommande',
-        types:     ['logement','zae','equipement','agriculture','eau'],
-        tmin:      1,
-        tel:       '03 84 36 21 35',
-        email:     '[PLACEHOLDER]@sudterritoire.fr',
-        adresse:   'Hotel de Ville, 1 place de la Republique, 90100 Delle',
-        web:       '[PLACEHOLDER]',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Zone transfrontaliere avec la Suisse. Specifites liees aux travailleurs frontaliers et aux projets proches de la frontiere.',
-      },
-    ]
-  },
-
-  /* ── EXPERTS ENVIRONNEMENT ───────────────────────────────────── */
-  environnement: {
-    label: 'Experts Environnement & Nature',
-    ico:   '&#x1F333;',
-    contacts: [
-      {
-        id:        'dreal',
-        nom:       'DREAL BFC — Direction Regionale Environnement, Amenagement, Logement',
-        role:      'Expertise environnementale regionale : Natura 2000, especes protegees, evaluation environnementale des plans et programmes, risques industriels (ICPE).',
-        priorite:  'recommande',
-        types:     ['energie','zae','transport','nature'],
-        tmin:      2,
-        tel:       '03 80 68 44 00',
-        email:     'dreal-bfc@developpement-durable.gouv.fr',
-        adresse:   '17 bis rue Archimede, CS 57067, 21000 Dijon',
-        web:       'https://www.bourgogne-franche-comte.developpement-durable.gouv.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Saisir la DREAL pour les projets soumis a evaluation environnementale (seuils fixes par le Code de l\'environnement).',
-      },
-      {
-        id:        'onf',
-        nom:       'ONF — Office National des Forets (UT Vosges du Nord / Franche-Comte)',
-        role:      'Gestion des forets publiques du departement. Expertise : sylviculture, biodiversite forestiere, risques naturels en zone boisee.',
-        priorite:  'recommande',
-        types:     ['nature','energie','agriculture'],
-        tmin:      1,
-        tel:       '[PLACEHOLDER]',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER] Belfort',
-        web:       'https://www.onf.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Contacter l\'agence ONF competente pour tout projet en zone forestiere ou en lisiere de foret publique.',
-      },
-      {
-        id:        'agence-eau',
-        nom:       'Agence de l\'Eau Rhone-Mediterranee-Corse',
-        role:      'Financement des projets de restauration de cours d\'eau, zones humides et amelioration de la qualite de l\'eau. Bassin RMC dont fait partie le Territoire de Belfort.',
-        priorite:  'recommande',
-        types:     ['eau','nature','agriculture'],
-        tmin:      1,
-        tel:       '04 72 71 26 70',
-        email:     'direction.lyon@eaurmc.fr',
-        adresse:   '2-4 allee de Lodz, 69363 Lyon Cedex 07',
-        web:       'https://www.eaurmc.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Guichet de financement pour les projets de restauration morphologique des cours d\'eau et de reconquete de la qualite de l\'eau.',
-      },
-      {
-        id:        'atmo',
-        nom:       'ATMO Bourgogne-Franche-Comte',
-        role:      'Surveillance de la qualite de l\'air. Fourniture des donnees de la Carte Strategique de l\'Air (CSA) utilisee dans l\'Atlas DDT 90 (C18).',
-        priorite:  'optionnel',
-        types:     ['logement','zae','equipement','transport'],
-        tmin:      2,
-        tel:       '[PLACEHOLDER]',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER]',
-        web:       'https://www.atmo-bfc.org',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Consulter pour les projets dans les secteurs a qualite d\'air degradee (axes routiers a fort trafic, zones industrielles).',
-      },
-    ]
-  },
-
-  /* ── AGRICULTURE & FONCIER ───────────────────────────────────── */
-  agriculture: {
-    label: 'Agriculture & Foncier',
-    ico:   '&#x1F33E;',
-    contacts: [
-      {
-        id:        'chambre-agri',
-        nom:       'Chambre d\'Agriculture du Territoire de Belfort',
-        role:      'Conseil et expertise agricole. Avis consultatif sur les projets impactant les terres agricoles. Accompagnement des porteurs de projets agri.',
-        priorite:  'obligatoire',
-        types:     ['agriculture','logement','zae','nature','friche'],
-        tmin:      1,
-        tel:       '03 84 22 31 32',
-        email:     'chambre-agriculture-90@agri90.fr',
-        adresse:   '7 rue du General Passaga, BP 40 034, 90001 Belfort Cedex',
-        web:       'https://www.agri90.fr',
-        horaires:  'Lun-Ven 8h30-12h00 / 13h30-17h00',
-        note:      'Consultation recommandee avant tout projet consommateur de foncier agricole. Participe a la CDPENAF.',
-      },
-      {
-        id:        'safer',
-        nom:       'SAFER Bourgogne-Franche-Comte',
-        role:      'Societe d\'amenagement foncier. Droit de preemption sur les ventes de terres agricoles. Accompagnement des transactions foncieres.',
-        priorite:  'recommande',
-        types:     ['agriculture','logement','zae','friche'],
-        tmin:      1,
-        tel:       '03 80 68 64 00',
-        email:     'safer@safer-bfc.fr',
-        adresse:   '4 bis boulevard de la Tremoille, BP 21531, 21015 Dijon Cedex',
-        web:       'https://www.safer-bfc.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Informer la SAFER de tout projet foncier concernant des terres agricoles pour eviter un droit de preemption tardif.',
-      },
-      {
-        id:        'epf-bfc',
-        nom:       'EPF BFC — Etablissement Public Foncier',
-        role:      'Portage foncier pour les collectivites. Intervention sur les friches industrielles et commerciales. Preamenagement et portage temporaire.',
-        priorite:  'recommande',
-        types:     ['friche','logement','zae'],
-        tmin:      2,
-        tel:       '03 80 28 59 20',
-        email:     'contact@epf-bfc.fr',
-        adresse:   '9 boulevard Carnot, BP 78, 21003 Dijon Cedex',
-        web:       'https://www.epf-bfc.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'L\'EPF peut porter le foncier pendant l\'etude et le portage du projet. Contacter en amont pour les projets de rehabilitation de friches complexes.',
-      },
-    ]
-  },
-
-  /* ── URBANISME & PLANIFICATION ───────────────────────────────── */
-  urbanisme: {
-    label: 'Urbanisme & Planification',
-    ico:   '&#x1F4CB;',
-    contacts: [
-      {
-        id:        'autb',
-        nom:       'AUTB — Agence d\'Urbanisme du Territoire de Belfort',
-        role:      'Expertise en urbanisme et planification territoriale. Accompagnement des collectivites pour les SCoT, PLU et PLUi. Observatoire foncier.',
-        priorite:  'recommande',
-        types:     ['logement','zae','equipement','transport','friche'],
-        tmin:      2,
-        tel:       '03 84 21 52 70',
-        email:     'contact@autb.fr',
-        adresse:   '4 rue de la Faucille, 90000 Belfort',
-        web:       'https://www.autb.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Ressource cle pour les etudes de planification et d\'urbanisme. Dispose de l\'observatoire foncier du Territoire de Belfort.',
-      },
-      {
-        id:        'cerema',
-        nom:       'CEREMA — Centre d\'Etudes et d\'Expertise sur les Risques',
-        role:      'Appui technique de l\'Etat aux collectivites : risques naturels, bruit, mobilites, ingenerie de projets complexes, rehabilitation de friches.',
-        priorite:  'optionnel',
-        types:     ['transport','friche','energie','risques'],
-        tmin:      3,
-        tel:       '[PLACEHOLDER]',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER]',
-        web:       'https://www.cerema.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Mobilisable sur mission specifique pour les projets complexes necessitant une expertise technique pointue.',
-      },
-    ]
-  },
-
-  /* ── ENERGIE & TRANSITION ────────────────────────────────────── */
-  energie: {
-    label: 'Energie & Transition ecologique',
-    ico:   '&#x26A1;',
-    contacts: [
-      {
-        id:        'ademe90',
-        nom:       'ADEME — Agence de la Transition Ecologique (antenne BFC)',
-        role:      'Financement et expertise : efficacite energetique, ENR, rehabilitation de friches polluees (Fonds Friches), economie circulaire.',
-        priorite:  'recommande',
-        types:     ['energie','friche','zae','equipement'],
-        tmin:      1,
-        tel:       '03 81 47 20 90',
-        email:     'ademe-bfc@ademe.fr',
-        adresse:   '9 rue Beauregard, 25000 Besancon',
-        web:       'https://bourgogne-franche-comte.ademe.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Guichet Fonds Friches pour les projets de rehabilitation de sites pollues. Accompagnement technique et financier.',
-      },
-      {
-        id:        'te90',
-        nom:       'Territoire d\'Energie 90',
-        role:      'Syndicat d\'energie du departement. Gestion des reseaux de distribution electrique et gaz. Cadastre solaire (Atlas C22). Accompagnement ENR.',
-        priorite:  'recommande',
-        types:     ['energie','logement','equipement','zae'],
-        tmin:      1,
-        tel:       '[PLACEHOLDER]',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER] Belfort',
-        web:       '[PLACEHOLDER]',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Contact privilegie pour le cadastre solaire et les questions de raccordement aux reseaux d\'energie.',
-      },
-      {
-        id:        'enedis',
-        nom:       'Enedis — Gestionnaire Reseau Distribution (GRD)',
-        role:      'Raccordement au reseau de distribution electrique. Etudes de raccordement pour les installations de production ENR et les nouvelles constructions.',
-        priorite:  'recommande',
-        types:     ['energie','logement','zae','equipement'],
-        tmin:      1,
-        tel:       '09 70 83 19 70',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER] Belfort',
-        web:       'https://www.enedis.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Contacter pour toute demande de raccordement ou etude de capacite d\'injection pour les projets ENR.',
-      },
-    ]
-  },
-
-  /* ── FINANCEMENT & INGENIERIE ────────────────────────────────── */
-  financement: {
-    label: 'Financement & Ingenierie de projet',
-    ico:   '&#x1F4B6;',
-    contacts: [
-      {
-        id:        'banque-terr',
-        nom:       'Banque des Territoires (Caisse des Depots)',
-        role:      'Financement des projets d\'investissement des collectivites : logement social, infrastructure, renovation energetique, numerique.',
-        priorite:  'recommande',
-        types:     ['logement','equipement','energie','friche'],
-        tmin:      2,
-        tel:       '03 81 65 55 00',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER] Besancon',
-        web:       'https://www.banquedesterritoires.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Interlocuteur cle pour les collectivites cherchant des co-financements sur des projets structurants.',
-      },
-      {
-        id:        'anct',
-        nom:       'ANCT — Agence Nationale de Cohesion des Territoires',
-        role:      'Pilotage des programmes ACV et PVD. Ingenierie de projet pour les communes labellisees. Fonds vert.',
-        priorite:  'optionnel',
-        types:     ['logement','friche','equipement'],
-        tmin:      1,
-        tel:       '[PLACEHOLDER]',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER]',
-        web:       'https://agence-cohesion-territoires.gouv.fr',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Passer par le delegue territorial (Prefet) pour acceder aux programmes ANCT (ACV, PVD).',
-      },
-    ]
-  },
-
-  /* ── EXPERTS LOCAUX & BUREAUX D'ETUDES ───────────────────────── */
-  experts: {
-    label: 'Experts locaux & Bureaux d\'etudes',
-    ico:   '&#x1F9D1;&#x200D;&#x1F4BC;',
-    contacts: [
-      {
-        id:        'geo-bm',
-        nom:       '[PLACEHOLDER] Bureau d\'etudes en geotechnique',
-        role:      'Etudes geotechniques (G1, G2) : fondations, retrait-gonflement des argiles, mouvements de terrain. Obligatoire en zone d\'exposition argiles.',
-        priorite:  'obligatoire',
-        types:     ['logement','zae','equipement'],
-        tmin:      1,
-        tel:       '[PLACEHOLDER]',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER] Belfort / Montbeliard',
-        web:       '[PLACEHOLDER]',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Plusieurs bureaux d\'etudes geotechniques operent dans le 90. Contacter la DDT 90 pour une liste de prestataires agrees.',
-      },
-      {
-        id:        'bureau-enviro',
-        nom:       '[PLACEHOLDER] Bureau d\'etudes environnementales',
-        role:      'Etudes d\'impact environnemental, inventaires naturalistes, evaluation d\'incidences Natura 2000, etudes de bruit, qualite de l\'air.',
-        priorite:  'recommande',
-        types:     ['energie','zae','transport','nature'],
-        tmin:      2,
-        tel:       '[PLACEHOLDER]',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER]',
-        web:       '[PLACEHOLDER]',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Obligatoire pour les projets soumis a evaluation environnementale. La DDT 90 dispose d\'une liste de bureaux d\'etudes locaux.',
-      },
-      {
-        id:        'architecte',
-        nom:       'CAUE 90 — Conseil Architecture Urbanisme Environnement',
-        role:      'Conseil independant en architecture, urbanisme et paysage. Accompagnement gratuit des elus et des particuliers. Integration paysagere des projets.',
-        priorite:  'recommande',
-        types:     ['logement','equipement','zae','patrimoine'],
-        tmin:      1,
-        tel:       '[PLACEHOLDER]',
-        email:     '[PLACEHOLDER]',
-        adresse:   '[PLACEHOLDER] Belfort',
-        web:       '[PLACEHOLDER]',
-        horaires:  '[PLACEHOLDER]',
-        note:      'Ressource precieuse pour les questions d\'integration architecturale et paysagere, notamment en secteur sensible.',
-      },
-    ]
-  },
-};
-
-/* ════════════════════════════════════════════════════════════════════
-   LOGIQUE CONTACTS
-   ════════════════════════════════════════════════════════════════════ */
+/* ── CONTACTS — logique d'affichage, filtrage par type/zone/EPCI ───────────── */
 
 /* Etat du panneau contacts */
 var contactsOuverts = false;
@@ -2024,11 +1214,6 @@ function detecterCommuneProjet() {
   return null;
 }
 
-/**
- * Retourne les infos d'un EPCI du Territoire de Belfort.
- * @param  {string} codeEpci  Code INSEE (200069052 | 200069060 | 249000241)
- * @return {{ nom, acronyme, url } | null}
- */
 function getEpciInfo(codeEpci) {
   var epciMap = {
     '200069052': {
@@ -2062,10 +1247,6 @@ function getEpciInfo(codeEpci) {
   return epciMap[codeEpci] || null;
 }
 
-/**
- * Construit la liste des contacts filtrés selon le type de projet
- * et les zones actives. Injecte dans #contacts-ctx et #contacts-liste.
- */
 function genererContacts() {
   var type   = A.typeProjet;
   var taille = A.taille;
@@ -2164,7 +1345,7 @@ function genererContacts() {
     'onf':          ['foret','feux_foret','reservoir','natura2000'],
     'agence-eau':   ['zone_humide','cours_eau','sage','captage_aep','nitrates'],
     'atmo':         ['bruit_1','trafic_fort'],
-    'chambre-agri': ['nitrates','zone_humide','captage_aep'],
+    'chambre-agri': ['nitrates','zone_humide','captage_aep','region_agri','bio','agroecologie','siqo_aop','circuit_court'],
     'safer':        null, /* toujours si type agriculture */
   };
 
@@ -2269,7 +1450,7 @@ function creerCarteContact(c) {
     );
   }
 
-  /* Boutons d'action */
+  /* Boutons d\'action */
   var actions = [];
   if (c.tel && !c.tel.startsWith('[')) {
     actions.push(
@@ -2313,9 +1494,7 @@ function creerCarteContact(c) {
   return div;
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   SOUS-TYPES — logique UI
-   ════════════════════════════════════════════════════════════════════ */
+/* ── SOUS-TYPES UI — affichage boutons + sélection ──────────────────────────── */
 
 /* Etat */
 A.sousType = null;
@@ -2372,9 +1551,7 @@ function selSousType(btn, st) {
 
 /* Patch selType pour afficher les sous-types */
 
-/* ════════════════════════════════════════════════════════════════════
-   CHECKLIST — logique UI
-   ════════════════════════════════════════════════════════════════════ */
+/* ── CHECKLIST UI — génération, progression, items, reset ──────────────────── */
 
 var checklistOuverte = false;
 var checklistEtats   = {};  /* { itemId: 'done' | 'expanded' | '' } */
@@ -2406,7 +1583,17 @@ function toggleChecklist() {
 /* Génère la checklist selon le sous-type courant (ou _default) */
 function genererChecklist() {
   var clKey   = A.sousType || '_default';
-  var etapes  = CHECKLISTS[clKey] || CHECKLISTS['_default'];
+  var etapes  = (CHECKLISTS[clKey] || CHECKLISTS['_default']).slice();
+
+  /* ── Items agricoles contextuels ── */
+  if (A.typeProjet === 'agriculture' && A._zonesAgri && A._zonesAgri.length > 0) {
+    var agriItems = checklistAgricoleContextuelle(A._zonesAgri);
+    agriItems.forEach(function(item) {
+      if (!etapes.some(function(e){ return e.id === item.id; })) {
+        etapes.unshift(item);
+      }
+    });
+  }
   var ctxEl   = document.getElementById('checklist-ctx');
   var bodyEl  = document.getElementById('checklist-body');
 
@@ -2593,19 +1780,7 @@ function resetChecklist(etapes) {
   genererChecklist();
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   RECHERCHE D'ADRESSE — API Nominatim (OpenStreetMap)
-   Nominatim est un service de geocodage gratuit et ouvert base sur
-   les donnees OpenStreetMap. Aucune cle API n'est requise.
-   URL : https://nominatim.openstreetmap.org/search
-
-   Fonctionnement :
-     1. L'utilisateur tape une adresse dans la barre de recherche.
-     2. Apres 350 ms de pause (debounce), on interroge Nominatim.
-     3. Les suggestions s'affichent sous la barre.
-     4. Un clic ou Entree centre la carte sur le resultat et place
-        un marqueur temporaire (qui disparait apres 8 s).
-   ════════════════════════════════════════════════════════════════════ */
+/* ── RECHERCHE D'ADRESSE — Nominatim OSM (autocomplete + géocodage) ──────────── */
 
 /* ── Etat de la recherche ──────────────────────────────────────── */
 var recherche = {
@@ -2616,30 +1791,6 @@ var recherche = {
   toastTimer:     null,   /* setTimeout pour masquer le toast */
 };
 
-/* ── Icones par type de resultat ───────────────────────────────── */
-var SUGG_ICONS = {
-  house:              '&#x1F3E0;',
-  residential:        '&#x1F3D8;',
-  road:               '&#x1F6E3;',
-  pedestrian:         '&#x1F6B6;',
-  city:               '&#x1F3D9;',
-  town:               '&#x1F3D9;',
-  village:            '&#x1F3E1;',
-  hamlet:             '&#x1F3E1;',
-  suburb:             '&#x1F3D8;',
-  postcode:           '&#x1F4EE;',
-  administrative:     '&#x1F3DB;',
-  farm:               '&#x1F33E;',
-  industrial:         '&#x1F3ED;',
-  commercial:         '&#x1F6CD;',
-  retail:             '&#x1F6CD;',
-  school:             '&#x1F4DA;',
-  hospital:           '&#x1F3E5;',
-  park:               '&#x1F333;',
-  forest:             '&#x1F332;',
-  water:              '&#x1F30A;',
-  _default:           '&#x1F4CD;',
-};
 
 /* Retourne l'icone en fonction du type Nominatim */
 function getIconeSuggestion(type, classe) {
@@ -2973,9 +2124,20 @@ function placerProjetIci(lat, lng) {
 }
 
 /* ── Toast de confirmation (message flottant ephemere) ───────── */
+/** Bascule l'état ouvert/fermé de la légende (corps #leg-body). */
+function toggleLegende() {
+  var body = document.getElementById('leg-body');
+  var ico  = document.getElementById('leg-toggle-ico');
+  if (!body) return;
+  var collapsed = body.classList.toggle('leg-collapsed');
+  if (ico) ico.textContent = collapsed ? '▼' : '▲';
+}
+
 function afficherToast(msg) {
   var toast = document.getElementById('search-toast');
   toast.innerHTML = msg;
+  toast.style.cursor = '';
+  toast.onclick = null;
   toast.classList.add('on');
 
   /* Masquer apres 3 secondes */
@@ -2985,6 +2147,27 @@ function afficherToast(msg) {
   }, 3000);
 }
 
+/** Toast cliquable qui zoome la carte au niveau indiqué. */
+function afficherToastZoom(msg, zoomLevel) {
+  var toast = document.getElementById('search-toast');
+  toast.innerHTML = msg;
+  toast.style.cursor = 'pointer';
+  toast.onclick = function() {
+    A.carte.setZoom(zoomLevel);
+    toast.classList.remove('on');
+    toast.onclick = null;
+    toast.style.cursor = '';
+  };
+  toast.classList.add('on');
+
+  clearTimeout(recherche.toastTimer);
+  recherche.toastTimer = setTimeout(function() {
+    toast.classList.remove('on');
+    toast.onclick = null;
+    toast.style.cursor = '';
+  }, 5000);
+}
+
 /* ── Fermer les suggestions si on clique ailleurs ─────────────── */
 document.addEventListener('click', function(e) {
   if (!document.getElementById('search-wrap').contains(e.target)) {
@@ -2992,11 +2175,8 @@ document.addEventListener('click', function(e) {
   }
 });
 
-/* ════════════════════════════════════════════════════════════════════
-   TUTORIEL D'ONBOARDING
-   Affiché au premier chargement de la page (via localStorage).
-   Composé de slides statiques + slides serious game interactif.
-   ════════════════════════════════════════════════════════════════════ */
+/* ── TUTORIEL D'ONBOARDING — slides statiques + serious game interactif
+   Affiché à chaque démarrage. localStorage 'ddt90_tuto_v3' inutilisé.  */
 
 /* ── Données des slides ─────────────────────────────────────────── */
 var TUTO_SLIDES = [
@@ -3084,7 +2264,7 @@ var TUTO_SLIDES = [
             '</div>' +
           '</div>' +
           '<div class="tuto-feat">' +
-            '<span class="tuto-feat-ico">3&#xFE0F;&#x20E3;</span>' +
+            '<span class="tuto-feat-ico">4&#xFE0F;&#x20E3;</span>' +
             '<div class="tuto-feat-body">' +
               '<div class="tuto-feat-titre">Couches thematiques Atlas</div>' +
               '<div class="tuto-feat-desc">Activez les 11 couches de l\'Atlas (risques, eau, biodiversite, urbanisme...) pour visualiser les enjeux directement sur la carte.</div>' +
@@ -3176,71 +2356,7 @@ var TUTO_SLIDES = [
   },
 ];
 
-/* ── Cas du serious game ────────────────────────────────────────── */
-var SG_CAS = {
-  titre:       'Projet de lotissement — Commune de Cravanche',
-  description: 'La commune de Cravanche (90200) souhaite autoriser la creation d\'un lotissement de 15 maisons individuelles sur un terrain de 2,8 ha situe en bordure de la Savoureuse, en zone UB du PLU communal. Le maire vous consulte avant de donner son accord de principe.',
-  meta: ['15 logements', '2,8 ha', 'Zone UB', 'Bordure Savoureuse'],
-  scenario_ico: '&#x1F3D8;',
-};
 
-var SG_QUESTIONS = [
-  {
-    q: 'Quelle est la PREMIERE verification a effectuer avant d\'autoriser ce projet ?',
-    opts: [
-      { txt: 'Verifier que le terrain est bien en zone UB du PLU', correct: false },
-      { txt: 'Consulter le PPRi de la Savoureuse pour verifier si le terrain est en zone inondable', correct: true },
-      { txt: 'Demander une etude de marche pour verifier le besoin en logements', correct: false },
-      { txt: 'Contacter Enedis pour le raccordement electrique', correct: false },
-    ],
-    feedback_ok: '&#x2705; Correct ! La Savoureuse est soumise au PPRi. 85 communes du 90 sont en zone inondable. Un terrain en zone rouge du PPRi interdit toute construction. Cette verification est absolument prioritaire.',
-    feedback_ko: '&#x274C; Pas tout a fait. Certes, le zonage PLU est important, mais la proximite de la Savoureuse impose de verifier le PPRi en tout premier lieu. Un terrain en zone rouge PPRi ne peut pas etre construit, quels que soient les autres elements.',
-  },
-  {
-    q: 'Le terrain est classe en zone bleue du PPRi. Quelle autorisation d\'urbanisme est necesssaire pour ce lotissement de 15 lots ?',
-    opts: [
-      { txt: 'Un Permis de Construire (PC) pour chaque maison', correct: false },
-      { txt: 'Une Declaration Prealable (DP)', correct: false },
-      { txt: 'Un Permis d\'Amenager (PA) obligatoire pour tout lotissement de plus de 2 lots', correct: true },
-      { txt: 'Aucune autorisation car la commune a un PLU', correct: false },
-    ],
-    feedback_ok: '&#x2705; Exact ! Un lotissement creant plus de 2 lots constructibles destines a l\'implantation de batiments necessite un Permis d\'Amenager (PA). Le PA est distinct des PC que chaque acquereur devra deposer ensuite.',
-    feedback_ko: '&#x274C; Incorrect. Pour un lotissement de plus de 2 lots, c\'est un Permis d\'Amenager (PA) qui est requis, pas un PC. Le PA est instruit par la DDT 90 (commune hors PLU) ou la mairie (commune avec PLU).',
-  },
-  {
-    q: 'Le projet est situe a 80 m de la Citadelle de Belfort (Monument Historique classe). Qui doit obligatoirement etre consulte ?',
-    opts: [
-      { txt: 'La DREAL Bourgogne-Franche-Comte', correct: false },
-      { txt: 'L\'Architecte des Batiments de France (ABF) de l\'UDAP 90', correct: true },
-      { txt: 'Le Conseil Departemental du Territoire de Belfort', correct: false },
-      { txt: 'Aucune consultation supplementaire n\'est requise', correct: false },
-    ],
-    feedback_ok: '&#x2705; Parfait ! Dans le perimetre de protection de 500 m autour d\'un Monument Historique, l\'avis de l\'Architecte des Batiments de France (ABF) de l\'UDAP 90 est OBLIGATOIRE et CONFORME. Son accord est necessaire pour que le permis soit delivre.',
-    feedback_ko: '&#x274C; Non. Dans le perimetre de 500 m autour d\'un Monument Historique, c\'est l\'Architecte des Batiments de France (ABF) de l\'UDAP 90 qui doit etre consulte. Son avis est conforme : sans son accord, le permis ne peut pas etre delivre.',
-  },
-  {
-    q: 'Pour la gestion des eaux pluviales du lotissement, quelle approche est prioritaire selon la loi ZAN et la reglementation eau ?',
-    opts: [
-      { txt: 'Raccordement systematique au reseau pluvial municipal', correct: false },
-      { txt: 'Rejet direct dans la Savoureuse apres traitement', correct: false },
-      { txt: 'Gestion des eaux pluviales a la parcelle : noues, jardins de pluie, toitures vegetalisees', correct: true },
-      { txt: 'Construction d\'un bassin de retenue collectif unique en bout de lotissement', correct: false },
-    ],
-    feedback_ok: '&#x2705; Excellent ! La gestion a la source (noues, toitures vegetalisees, jardins de pluie) est privilegiee car elle limite l\'impermeabilisation, contribue a la biodiversite et reduit le ruissellement vers la Savoureuse. La loi sur l\'eau (IOTA) peut necessiter une declaration ou autorisation.',
-    feedback_ko: '&#x274C; Pas tout a fait. La gestion a la source — noues, toitures vegetalisees, jardins de pluie — est prioritaire car elle limite l\'impermeabilisation des sols et reduit le risque de ruissellement. Un bassin collectif peut etre complementaire mais ne doit pas etre la seule solution.',
-  },
-  {
-    q: 'Avec 15 lots vendus a des particuliers, la commune est-elle soumise aux obligations de la loi SRU sur le logement social ?',
-    opts: [
-      { txt: 'Oui, toujours pour tout projet de plus de 5 logements', correct: false },
-      { txt: 'Non, la loi SRU ne s\'applique pas aux communes de moins de 3 500 habitants', correct: true },
-      { txt: 'Oui, 25% des logements doivent etre sociaux quelle que soit la taille de la commune', correct: false },
-      { txt: 'Seulement si la commune est dans GBCA', correct: false },
-    ],
-    feedback_ok: '&#x2705; Correct ! La loi SRU (25% de logements sociaux) ne s\'applique qu\'aux communes de plus de 3 500 habitants appartenant a des agglomérations ou intercommunalites de plus de 50 000 habitants. Cravanche (~1 400 hab.) n\'est pas concernee.',
-    feedback_ko: '&#x274C; Pas tout a fait. La loi SRU (25% de logements sociaux obligatoires) ne concerne que les communes de plus de 3 500 habitants dans des intercommunalites de plus de 50 000 habitants. Cravanche (~1 400 hab.) est exempte de cette obligation.',
-  },
-];
 
 /* ── Etat du tutoriel et du serious game ───────────────────────── */
 var tuto = {
@@ -3323,11 +2439,8 @@ function renderSlide() {
   }
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   SERIOUS GAME
-   ════════════════════════════════════════════════════════════════════ */
+/* ── SERIOUS GAME — quiz intégré au tutoriel, scoring SG_CAS + SG_QUESTIONS ── */
 
-/* Lance le Serious Game pédagogique depuis la dernière slide du tutoriel. */
 function demarrerSeriousGame() {
   tuto.sgActif    = true;
   tuto.sgQuestion = 0;
@@ -3498,11 +2611,8 @@ function afficherScoreSG() {
     '</div>';
 }  /* ── fin afficherScoreSG ── */
 
-/* ════════════════════════════════════════════════════════════════════
-   THEME SOMBRE — toggleDarkMode / initTheme
-   ════════════════════════════════════════════════════════════════════ */
+/* ── THÈME SOMBRE — toggleDarkMode / initTheme (localStorage 'ddt90_dark') ── */
 
-/* Bascule le thème sombre/clair et persiste le choix dans localStorage. */
 function toggleDarkMode() {
   var isDark = document.body.classList.toggle('dark-mode');
   var icon   = document.getElementById('dark-mode-icon');
@@ -3510,7 +2620,6 @@ function toggleDarkMode() {
   try { localStorage.setItem('theme', isDark ? 'dark' : 'light'); } catch(e) {}
 }
 
-/* Lit localStorage et applique le thème sombre/clair au démarrage. */
 function initTheme() {
   var saved = '';
   try { saved = localStorage.getItem('theme') || ''; } catch(e) {}
@@ -3521,14 +2630,8 @@ function initTheme() {
   }
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   ONGLETS DU PANNEAU DROIT
-   ════════════════════════════════════════════════════════════════════ */
+/* ── ONGLETS DU PANNEAU DROIT — enjeux / simulation / contacts / checklist ── */
 
-/**
- * Affiche l'onglet demandé dans le panneau droit et masque l'autre.
- * @param {string} id  "enjeux" | "simulation"
- */
 function switchTab(id) {
   /* Activer le bouton */
   document.querySelectorAll('.tab-btn').forEach(function(b) {
@@ -3539,42 +2642,10 @@ function switchTab(id) {
   document.getElementById('tab-simulation').style.display = id === 'simulation' ? 'block' : 'none';
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   MOTEUR DE SIMULATION DE PROJET
-   Calcule : durée estimée, complexité, impact environnemental
-   en fonction du type, de la taille, et de la localisation
-   ════════════════════════════════════════════════════════════════════ */
+/* ── SIMULATION — SIM_BASE + ZONES_RISQUE + modificateurs zones agricoles
+   Résultat stocké dans A._sim pour le rapport PDF.                    */
 
-/* ── Tables de base par type de projet ── */
-var SIM_BASE = {
-  logement:    { ico:'🏘', dureeBase:[6,12,18,36],   complexBase:[25,45,65,85],  impactBase:[20,40,55,75] },
-  zae:         { ico:'🏭', dureeBase:[8,14,24,48],   complexBase:[35,55,70,90],  impactBase:[35,55,70,85] },
-  equipement:  { ico:'🏫', dureeBase:[10,18,30,48],  complexBase:[40,60,75,90],  impactBase:[25,40,55,70] },
-  energie:     { ico:'⚡', dureeBase:[12,24,36,60],  complexBase:[50,65,80,95],  impactBase:[10,20,30,40] },
-  transport:   { ico:'🛣', dureeBase:[12,24,48,72],  complexBase:[45,65,80,92],  impactBase:[40,60,75,88] },
-  agriculture: { ico:'🌾', dureeBase:[3,6,12,18],    complexBase:[15,30,45,60],  impactBase:[10,20,35,50] },
-  nature:      { ico:'🌳', dureeBase:[4,8,12,24],    complexBase:[20,35,50,65],  impactBase:[-30,-50,-65,-80] },
-  friche:      { ico:'🔄', dureeBase:[12,24,36,48],  complexBase:[55,70,82,95],  impactBase:[-20,-35,-50,-65] },
-};
 
-/* ── Facteurs liés à la localisation ── */
-/* Zones à risque dans le Territoire de Belfort : PPRi Savoureuse/Bourbeuse/Allaine */
-var ZONES_RISQUE = [
-  /* PPRi Savoureuse */
-  { lat:[47.59,47.72], lng:[6.84,6.89], label:'Zone PPRi Savoureuse', complexite:+15, duree:+3, impact:+10 },
-  /* PPRi Bourbeuse */
-  { lat:[47.62,47.66], lng:[6.70,6.89], label:'Zone PPRi Bourbeuse',  complexite:+12, duree:+2, impact:+8  },
-  /* PPRi Allaine */
-  { lat:[47.50,47.56], lng:[6.90,6.98], label:'Zone PPRi Allaine',    complexite:+12, duree:+2, impact:+8  },
-  /* Vosges du Sud (Natura 2000 + ZNIEFF) */
-  { lat:[47.70,47.87], lng:[6.65,6.82], label:'Zone Natura 2000 / ZNIEFF Vosges', complexite:+20, duree:+6, impact:+15 },
-  /* MH Belfort centre */
-  { lat:[47.62,47.65], lng:[6.84,6.89], label:'Perimetre Monument Historique',    complexite:+10, duree:+2, impact:+5  },
-  /* Zone nitrates Sundgau */
-  { lat:[47.48,47.65], lng:[6.88,7.10], label:'Zone vulnerable nitrates',         complexite:+8,  duree:+1, impact:+5  },
-  /* Zone sismique 3 (Vosges) */
-  { lat:[47.68,47.87], lng:[6.64,6.83], label:'Zone sismicite 3',                 complexite:+5,  duree:+1, impact:+3  },
-];
 
 /* ── Lance la simulation ── */
 function lancerSimulation() {
@@ -3621,6 +2692,16 @@ function lancerSimulation() {
     });
   }
 
+  var alertesAgri=[];var alertesAxes=[];
+  /* ── Modificateurs zones agricoles (si projet agriculture) ── */
+  if (A.typeProjet === 'agriculture' && A._zonesAgri && A._zonesAgri.length > 0) {
+    var modAgri = modificateursSimulationAgricole(A._zonesAgri);
+    duree   += modAgri.dureeDelta;
+    complex  = Math.min(99, complex + modAgri.complexDelta);
+    impact  += modAgri.impactDelta;
+    alertesAgri=modAgri.alertes;
+  }
+  if(A._axesMajeurs&&A._axesMajeurs.aProximite){var mA=modificateursSimulationAxesMajeurs(A._axesMajeurs);duree+=mA.dureeDelta;complex=Math.min(99,complex+mA.complexDelta);impact+=mA.impactDelta;alertesAxes=mA.alertes;}
   /* Clamp */
   duree   = Math.max(1, duree);
   complex = Math.max(1, Math.min(99, complex));
@@ -3643,8 +2724,8 @@ function lancerSimulation() {
     ? (impactAbs < 30 ? 'Léger bénéfice' : impactAbs < 55 ? 'Bénéfice notable' : impactAbs < 75 ? 'Fort bénéfice' : 'Très bénéfique')
     : (impactAbs < 30 ? 'Impact faible'  : impactAbs < 55 ? 'Impact modéré'    : impactAbs < 75 ? 'Impact fort'   : 'Impact majeur');
 
-  /* Alertes générales selon type+taille */
-  var alertesGen = calculerAlertesGenerales(A.typeProjet, taille, A.superficieHa);
+  /* Alertes générales selon type+taille + alertes zones agri */
+  var alertesGen = calculerAlertesGenerales(A.typeProjet, taille, A.superficieHa).concat(alertesAgri).concat(alertesAxes);
 
   /* Recommandations */
   var recos = calculerRecommandations(A.typeProjet, taille, alertesLoc, impactPos);
@@ -3664,6 +2745,17 @@ function lancerSimulation() {
     alertesGen:   alertesGen,
     recos:        recos,
   });
+
+  /* Stocker pour le rapport PDF */
+  A._sim = {
+    dureeStr:     dureeStr,
+    duree:        duree,
+    complex:      complex,
+    complexLabel: complexLabel,
+    impact:       impactAbs,
+    impactPos:    impactPos,
+    impactLabel:  impactLabel,
+  };
 
   /* Passer sur l'onglet simulation */
   switchTab('simulation');
@@ -3845,88 +2937,14 @@ function afficherResultatSimulation(r) {
     '</div>'; /* /sim-card */
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   PROJETS ALENTOURS
-   Utilise l'API Overpass (OpenStreetMap) pour interroger les
-   etablissements du meme type dans un rayon autour du projet.
-   La requete est construite dynamiquement selon le sous-type OSM.
-   ════════════════════════════════════════════════════════════════════ */
+/* ── PROJETS ALENTOURS — Overpass API (OSM)
+   Requête dynamique par sous-type (OSM_TAGS). Rayon réglable 500–5000 m. */
 
 /* ── Correspondance sous-type → tags OSM Overpass ────────────────
    Format : { key: 'amenity', value: 'school' }
    Plusieurs tags possibles (tableau = OR logique)
    ─────────────────────────────────────────────────────────────── */
-var OSM_TAGS = {
-  /* Logement */
-  maison:        [{ key:'building', value:'house' }, { key:'building', value:'detached' }],
-  lotissement:   [{ key:'landuse', value:'residential' }],
-  collectif:     [{ key:'building', value:'apartments' }, { key:'building', value:'residential' }],
-  hlm:           [{ key:'building', value:'apartments' }, { key:'social_facility', value:'housing' }],
-  residence:     [{ key:'building', value:'dormitory' }, { key:'tourism', value:'hostel' }],
-  camping:       [{ key:'tourism', value:'camp_site' }, { key:'tourism', value:'caravan_site' }],
 
-  /* ZAE */
-  artisanat:     [{ key:'craft', value:'*' }],
-  commerce:      [{ key:'shop', value:'supermarket' }, { key:'shop', value:'department_store' }, { key:'shop', value:'mall' }],
-  bureau:        [{ key:'office', value:'*' }],
-  industrie:     [{ key:'landuse', value:'industrial' }, { key:'building', value:'industrial' }],
-  logistique:    [{ key:'landuse', value:'industrial' }, { key:'building', value:'warehouse' }],
-  agricole_bat:  [{ key:'building', value:'barn' }, { key:'building', value:'farm_auxiliary' }],
-  parc_act:      [{ key:'landuse', value:'industrial' }, { key:'landuse', value:'commercial' }],
-
-  /* Equipement */
-  ecole:         [{ key:'amenity', value:'school' }, { key:'amenity', value:'college' }],
-  sante:         [{ key:'amenity', value:'hospital' }, { key:'amenity', value:'clinic' }, { key:'amenity', value:'doctors' }],
-  sport:         [{ key:'leisure', value:'sports_centre' }, { key:'leisure', value:'stadium' }, { key:'leisure', value:'swimming_pool' }],
-  culture:       [{ key:'amenity', value:'theatre' }, { key:'amenity', value:'cinema' }, { key:'amenity', value:'library' }],
-  culte:         [{ key:'amenity', value:'place_of_worship' }],
-  administratif: [{ key:'amenity', value:'townhall' }, { key:'amenity', value:'police' }, { key:'office', value:'government' }],
-  technique:     [{ key:'amenity', value:'fire_station' }, { key:'amenity', value:'waste_disposal' }],
-  hebergement:   [{ key:'social_facility', value:'*' }, { key:'amenity', value:'shelter' }],
-
-  /* Energie */
-  pv_toiture:    [{ key:'generator:source', value:'solar' }, { key:'power', value:'generator' }],
-  pv_sol:        [{ key:'power', value:'plant' }, { key:'generator:source', value:'solar' }],
-  eolien:        [{ key:'generator:source', value:'wind' }, { key:'power', value:'generator' }],
-  biomasse:      [{ key:'generator:source', value:'biomass' }, { key:'amenity', value:'heating_station' }],
-  hydrogene:     [{ key:'industrial', value:'hydrogen' }],
-  ombriere:      [{ key:'amenity', value:'parking' }, { key:'covered', value:'yes' }],
-
-  /* Transport */
-  voirie:        [{ key:'highway', value:'residential' }, { key:'highway', value:'tertiary' }],
-  parking:       [{ key:'amenity', value:'parking' }],
-  piste_velo:    [{ key:'highway', value:'cycleway' }],
-  gare:          [{ key:'railway', value:'station' }, { key:'amenity', value:'bus_station' }],
-  pont:          [{ key:'bridge', value:'yes' }],
-  giratoire:     [{ key:'junction', value:'roundabout' }],
-
-  /* Agriculture */
-  elevage:       [{ key:'landuse', value:'farmyard' }, { key:'building', value:'cowshed' }],
-  maraichage:    [{ key:'landuse', value:'farmland' }, { key:'building', value:'greenhouse' }],
-  cereales:      [{ key:'landuse', value:'farmland' }, { key:'crop', value:'*' }],
-  vente_directe: [{ key:'shop', value:'farm' }, { key:'amenity', value:'marketplace' }],
-  bio:           [{ key:'organic', value:'yes' }, { key:'shop', value:'organic' }],
-  agrivoltaisme: [{ key:'generator:source', value:'solar' }, { key:'landuse', value:'farmland' }],
-  irrigation:    [{ key:'man_made', value:'pipeline' }, { key:'waterway', value:'canal' }],
-
-  /* Nature */
-  parc_urbain:   [{ key:'leisure', value:'park' }, { key:'leisure', value:'garden' }],
-  renaturation:  [{ key:'natural', value:'grassland' }, { key:'landuse', value:'meadow' }],
-  foret:         [{ key:'landuse', value:'forest' }, { key:'natural', value:'wood' }],
-  zh_restauration:[{ key:'natural', value:'wetland' }],
-  cours_eau:     [{ key:'waterway', value:'river' }, { key:'waterway', value:'stream' }],
-  piste_nature:  [{ key:'highway', value:'path' }, { key:'route', value:'hiking' }],
-
-  /* Friche */
-  friche_ind:    [{ key:'landuse', value:'brownfield' }, { key:'building', value:'ruins' }],
-  friche_comm:   [{ key:'landuse', value:'brownfield' }, { key:'shop', value:'vacant' }],
-  friche_agri:   [{ key:'landuse', value:'brownfield' }, { key:'abandoned:landuse', value:'farmland' }],
-  friche_fer:    [{ key:'railway', value:'abandoned' }, { key:'landuse', value:'railway' }],
-  renat_friche:  [{ key:'landuse', value:'brownfield' }],
-
-  /* Fallback générique */
-  _default:      [{ key:'building', value:'yes' }],
-};
 
 /* ── État alentours ── */
 var alentours = {
@@ -4140,14 +3158,9 @@ function afficherAlentours() {
   }
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   DETECTION SPATIALE — Enjeux contextuels selon la localisation
-   Teste si le point du projet est dans/près des polygones/points
-   de COUCHES_DATA et injecte les enjeux correspondants.
-   ════════════════════════════════════════════════════════════════════ */
+/* ── DÉTECTION SPATIALE — utilitaires géo
+   Deux systèmes coexistent : pointInPolygon (ancien) + pointDansPolygone (nouveau) */
 
-/* Table de correspondance zone_type → enjeu contextuel */
-var ENJEUX_CONTEXTUELS = {"ppri":{"label":"Zone inondable PPRi","rayon_m":0,"enjeu":{"id":"ctx-ppri","nom":"Zone inondable — PPRi applicable","ico":"🌊","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est localisé dans le périmètre d'un PPRi (Plan de Prévention du Risque Inondation)","Cours d'eau à réaction rapide lors des fontes de neige (tronçon vosgien)","85 communes du Territoire de Belfort concernées par le risque inondation"],"consequences":["Construction strictement interdite en zone rouge PPRi","Prescriptions obligatoires en zone bleue (plancher surélevé, matériaux résistants à l'eau)","Assurance habitation majorée, valeur vénale réduite","Permis refusé sans étude hydraulique si zone bleue du PPRi"]},"economique":{"facteurs":["Coût de mise en conformité aux prescriptions PPRi (surélévation, étanchéité)","Surprime d'assurance inondation : +20 à +50 % sur la durée","Valeur vénale du bien réduite si zone bleue PPRi connue"],"consequences":["Budget travaux majoré de 5 à 25 % selon les prescriptions","Impossibilité de financement bancaire en zone rouge","Coût des études hydrauliques : 3 000 à 15 000 €"]},"politique":{"facteurs":["PPRi Savoureuse, Bourbeuse ou Allaine : servitude d'utilité publique opposable","Consultation obligatoire du service risques de la DDT 90","Information Acquéreur Locataire (IAL) obligatoire"],"consequences":["Refus de permis en zone rouge sans dérogation préfectorale","Contentieux possible si information insuffisante de l'acquéreur","Délais d'instruction majorés : consultation SDIS et DDT"]},"social":{"facteurs":["Sécurité des futurs occupants en cas de crue","Expériences traumatiques des crues passées dans le 90","Plan Communal de Sauvegarde (PCS) de la commune"],"consequences":["Risque vital pour les occupants si crue soudaine (flash flood vosgien)","Stress et insécurité psychologique liés au risque permanent","Obligation d'information des occupants sur les consignes d'évacuation"]}},"actions":["Consulter le règlement PPRi en mairie AVANT toute démarche","Vérifier le classement de la parcelle : zone rouge (interdit), bleue (prescriptions), blanche (hors zone)","Réaliser une étude hydraulique si zone bleue ou limite de zone","Contacter la DDT 90 — service risques : 03 84 58 86 00"],"refs":[{"n":"C57","t":"Risque inondation"},{"n":"C58","t":"PPRi Savoureuse/Bourbeuse/Allaine"}]}},"azi":{"label":"Atlas Zones Inondables","rayon_m":0,"enjeu":{"id":"ctx-azi","nom":"Zone inondable — Atlas AZI","ico":"💧","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Localisation dans l'Atlas des Zones Inondables (AZI) de la Bourbeuse ou de la Douce","Zone non couverte par un PPRi mais soumise au risque inondation identifié"],"consequences":["Risque réel d'inondation même sans PPRi opposable","Obligation de prise en compte dans le PC (article R111-2 du Code de l'urbanisme)"]},"economique":{"facteurs":["Surprime d'assurance possible selon la déclaration de zone"],"consequences":["Valeur vénale potentiellement impactée si AZI mentionné dans l'état des risques"]},"politique":{"facteurs":["IAL obligatoire si commune listée dans l'arrêté préfectoral","Pas de PPRi mais le maire peut refuser sur R111-2"],"consequences":["Responsabilité du maire si construction autorisée dans une zone à risque connu"]},"social":{"facteurs":["Information des futurs occupants sur le risque identifié mais non réglementé"],"consequences":["Sentiment d'insécurité si la zone est régulièrement inondée en pratique"]}},"actions":["Consulter l'AZI à la DDT 90 ou sur Géorisques","Vérifier l'État des Risques et Pollutions (ERP) fourni par le vendeur","Prévoir des prescriptions constructives même sans PPRi opposable"],"refs":[{"n":"C57","t":"Risque inondation"},{"n":"C58","t":"AZI Bourbeuse/Douce"}]}},"sismique_3":{"label":"Zone sismicité 3 (modérée)","rayon_m":0,"enjeu":{"id":"ctx-sismique3","nom":"Risque sismique — Zone de sismicité 3","ico":"🏔","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Massif vosgien : zone de sismicité 3 (modérée) selon le zonage national","Séismes possibles avec dommages sur les structures légères"],"consequences":["Risque de dommages structurels en cas de séisme modéré","Fondations et structure à renforcer selon Eurocode 8"]},"economique":{"facteurs":["Surcoût de construction parasismique : +3 à +8 % du gros œuvre"],"consequences":["Obligation réglementaire générant un surcoût budgétaire","Économie à long terme sur les réparations post-séisme"]},"politique":{"facteurs":["Règles parasismiques (Eurocode 8) obligatoires pour les bâtiments neufs en zone 3","Catégories d'importance I à IV selon l'usage du bâtiment"],"consequences":["PC refusé si non-conformité aux règles parasismiques","Contrôle technique obligatoire pour les bâtiments en catégorie III et IV"]},"social":{"facteurs":["Sécurité des occupants en cas de secousse sismique","ERP et logements collectifs : risques amplifiés si structure inadaptée"],"consequences":["Protection de la vie humaine par les règles parasismiques","Responsabilité pénale du maître d'ouvrage si non-conformité"]}},"actions":["Vérifier la zone de sismicité et la catégorie d'importance du bâtiment","Appliquer l'Eurocode 8 et les règles PS 92 dès la conception","Recourir à un bureau de contrôle technique agréé pour les bâtiments sensibles"],"refs":[{"n":"C59","t":"Risque sismique — zones 2 et 3"}]}},"sismique_2":{"label":"Zone sismicité 2 (faible)","rayon_m":0,"enjeu":{"id":"ctx-sismique2","nom":"Risque sismique — Zone de sismicité 2","ico":"🏔","niv":"faible","tmin":2,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone de sismicité 2 (faible) : plaine de Belfort et plateaux jurassiens"],"consequences":["Risque limité mais non nul pour les bâtiments de catégorie III et IV"]},"economique":{"facteurs":["Surcoût parasismique limité en zone 2 (<2 % du gros œuvre)"],"consequences":["Impact budgétaire minimal mais obligatoire pour certaines catégories"]},"politique":{"facteurs":["Règles parasismiques applicables à partir de la catégorie d'importance II en zone 2"],"consequences":["ERP de grandes capacités et logements collectifs soumis aux règles parasismiques"]},"social":{"facteurs":["Risque résiduel faible pour les constructions légères"],"consequences":["Protection principalement pour les ERP et logements collectifs"]}},"actions":["Vérifier si la catégorie d'importance du bâtiment déclenche les règles parasismiques en zone 2","Consulter un bureau d'études structure pour les ERP et logements collectifs"],"refs":[{"n":"C59","t":"Risque sismique — zone 2"}]}},"mvt_terrain":{"label":"Aléa mouvement de terrain","rayon_m":0,"enjeu":{"id":"ctx-mvt-terrain","nom":"Mouvement de terrain — Versants vosgiens","ico":"⛰","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Versants vosgiens : aléa glissement de terrain, coulées boueuses, éboulements","Érosion accélérée lors des épisodes pluvieux intenses (changement climatique)"],"consequences":["Risque de destruction totale du bâti en cas de glissement majeur","Instabilité des fondations sur terrain en pente ou remblayé"]},"economique":{"facteurs":["Étude géotechnique G1+G2 obligatoire sur terrain en pente","Coût des confortements de pente : 20 000 à 200 000 €"],"consequences":["Renchérissement significatif si terrain nécessite des confortements","Assurance catastrophe naturelle possible si arrêté de CatNat"]},"politique":{"facteurs":["DDRM du 90 : risque mouvement de terrain identifié dans le secteur vosgien","Possible PPR mouvements de terrain si risque fort"],"consequences":["Le maire peut refuser sur R111-2 en zone à risque connu","Responsabilité engagée si construction autorisée sur terrain instable"]},"social":{"facteurs":["Sécurité des occupants sur les versants à forte pente","Accès aux secours difficile en cas d'événement sur versant"],"consequences":["Risque vital en cas de glissement rapide (non prévisible)","Traumatisme des populations exposées à des événements répétés"]}},"actions":["Commander une étude géotechnique G1 (investigation préliminaire) et G2 (avant projet) obligatoires","Consulter la carte des mouvements de terrain sur Géorisques (BRGM)","Contacter la DDT 90 pour vérifier si un PPR mouvements de terrain est applicable"],"refs":[{"n":"C60","t":"Aléa mouvements de terrain naturel"}]}},"argiles_moyen":{"label":"Zone argiles — aléa moyen","rayon_m":0,"enjeu":{"id":"ctx-argiles","nom":"Retrait-gonflement des argiles — Aléa moyen","ico":"🧱","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone d'exposition moyenne au retrait-gonflement des argiles (loi ELAN 2018)","Phénomène amplifié par les sécheresses successives (changement climatique)"],"consequences":["Fissuration des murs, décollement des façades, rupture des réseaux enterrés","Dommages estimés à 1,5 Md€/an en France, en hausse constante"]},"economique":{"facteurs":["Étude géotechnique G1+G2 obligatoire pour les maisons individuelles en zone argiles exposée (loi ELAN 2018)","Coût étude G2 : 3 000 à 8 000 €","Surcoût fondations adaptées : 5 000 à 20 000 €"],"consequences":["Obligation légale générant un surcoût budgétaire non négociable","Garantie décennale invalide si étude G2 absente sur zone exposée","Sinistres indemnisés via l'assurance catastrophe naturelle après arrêté préfectoral"]},"politique":{"facteurs":["Loi ELAN (2018) : étude G1+G2 obligatoire avant dépôt du PC en zone d'exposition moyenne ou forte","Arrêté de catastrophe naturelle (CatNat) requis pour l'indemnisation"],"consequences":["PC non instruit si étude absente en zone exposée","Responsabilité du constructeur engagée si mesures non respectées"]},"social":{"facteurs":["Impact psychologique sur les propriétaires face aux fissures progressives","Litige fréquent constructeur-propriétaire sur la responsabilité"],"consequences":["Stress et dévalorisation du bien résidentiel","Procédures longues (5 à 10 ans) pour l'indemnisation des sinistres argiles"]}},"actions":["Commander obligatoirement une étude G1 (Investigation préliminaire) et G2 (Avant projet) auprès d'un géotechnicien","Appliquer les mesures constructives : fondations ancrées sous la zone active, drainage périmétrique","Éviter les plantations gourmandes en eau à moins de 5 m du bâtiment","Consulter la carte BRGM argiles : argiles.fr"],"refs":[{"n":"C61","t":"Aléa retrait-gonflement argiles"}]}},"minier":{"label":"Zone de risque minier","rayon_m":200,"enjeu":{"id":"ctx-minier","nom":"Risque minier — Ancienne exploitation","ico":"⛏","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Présence de galeries minières anciennes sous-jacentes (mine de Giromagny et environs)","Risque d'effondrement différé des terrains superficiels"],"consequences":["Fontis (effondrement localisé soudain) possible sans signe précurseur","Contamination possible des sols et eaux souterraines par les résidus miniers"]},"economique":{"facteurs":["Étude de dangers miniers obligatoire avant tout projet de construction","Coût d'investigation et de confortement des galeries : 50 000 à 500 000 €"],"consequences":["Renchérissement majeur du projet voire impossibilité de construire","Responsabilité de l'État via le BRGM si mineur défaillant ou inconnu"]},"politique":{"facteurs":["Code minier : obligations d'information et de surveillance des anciens sites","BRGM : base de données des anciens travaux miniers (Géorisques)","Déclaration de sinistre minier possible auprès de la DREAL"],"consequences":["Refus de permis si galeries avérées sous l'emprise du projet","Enquête publique si mesures de confortement importantes"]},"social":{"facteurs":["Mémoire minière du territoire (mine de Giromagny — plomb et zinc)","Risque vital en cas d'effondrement brutal d'une galerie"],"consequences":["Anxiété des riverains vivant au-dessus de galeries connues","Patrimoine industriel minier à valoriser culturellement"]}},"actions":["Consulter la base GDM (Géorisques — données minières) avant tout achat","Contacter le BRGM pour une étude de dangers miniers","Vérifier l'Arrêté de Risque Minier (ARM) de la commune auprès de la préfecture"],"refs":[{"n":"C62","t":"Risque minier — mine de Giromagny"}]}},"feux_foret":{"label":"Aléa feux de forêt","rayon_m":0,"enjeu":{"id":"ctx-feux-foret","nom":"Risque feux de forêt — Zone forestière vosgienne","ico":"🔥","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone forestière vosgienne : risque feux de végétation en hausse (changement climatique)","Sécheresses estivales de plus en plus fréquentes dans la région BFC"],"consequences":["Destruction possible du bâtiment si feu de forêt à proximité immédiate","Dégradation de la biodiversité forestière après incendie"]},"economique":{"facteurs":["Débroussaillement obligatoire jusqu'à 50 m autour des constructions en zone classée","Surpoprime d'assurance incendie en zone boisée"],"consequences":["Coût annuel de débroussaillement : 500 à 2 000 € selon la surface","Obligation de débroussaillement pour les propriétaires, sous peine d'amende"]},"politique":{"facteurs":["Code forestier : Obligation Légale de Débroussaillement (OLD) en zones à risque","SDIS 90 : intervention difficile en zone forestière éloignée","DDRM du 90 : risque feux de forêt identifié dans le massif vosgien"],"consequences":["OLD opposable au propriétaire, exécutable d'office par la commune si non respectée","PC possible si distance minimale aux peuplements forestiers respectée"]},"social":{"facteurs":["Proximité des habitations isolées en lisière de forêt (hameaux vosgiens)","Évacuation difficile en cas de feu rapide sur versant"],"consequences":["Risque vital pour les habitants en cas de propagation rapide","Isolement des hameaux vosgiens si routes coupées par un incendie"]}},"actions":["Vérifier si la commune est classée en zone à risque feux de forêt (arrêté préfectoral)","Respecter l'Obligation Légale de Débroussaillement (50 m autour des constructions)","Contacter le SDIS 90 pour les prescriptions d'accès pompiers","Prévoir une réserve d'eau (citerne) si zone isolée du réseau"],"refs":[{"n":"C63","t":"Aléa feux de forêts"}]}},"radon":{"label":"Zone potentiel radon élevé","rayon_m":0,"enjeu":{"id":"ctx-radon","nom":"Risque Radon — Zone granite vosgien","ico":"☢","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Sous-sol granitique vosgien : émissions naturelles de radon plus élevées","Gaz radioactif naturel, inodore, issu de la désintégration de l'uranium et du radium","Concentration variable selon la porosité du sol, la ventilation du bâtiment"],"consequences":["2e cause de mortalité par cancer du poumon en France (3 000 décès/an)","Accumulation dans les sous-sols et vides sanitaires mal ventilés"]},"economique":{"facteurs":["Coût d'un détecteur radon : 50 à 200 €","Coût d'une membrane anti-radon à la construction : 1 000 à 5 000 €","VMC double flux recommandée : 3 000 à 8 000 €"],"consequences":["Surcoût modéré si mesures intégrées dès la conception","Coût de remédiation a posteriori beaucoup plus élevé (10 000 à 30 000 €)"]},"politique":{"facteurs":["Arrêté du 27 juin 2018 : niveau de référence à 300 Bq/m³","ERP : mesures obligatoires si niveau > 300 Bq/m³ (catégories 1 à 4)","Cartographie radon disponible par commune (IRSN)"],"consequences":["Obligation de mesure et d'action pour les ERP en zone à potentiel radon","Responsabilité du propriétaire si taux dépasse le seuil réglementaire"]},"social":{"facteurs":["Risque sanitaire peu connu du grand public","Exposition longue durée sans symptômes immédiats (cancer à long terme)"],"consequences":["Sensibilisation nécessaire des propriétaires et occupants","Droit à l'information des occupants sur le niveau radon mesuré"]}},"actions":["Installer un détecteur radon passif pendant 3 à 12 mois (IRSN recommande l'hiver)","Intégrer une membrane anti-radon sous dallage dès la construction","Installer une VMC double flux ou ventilation mécanique efficace","Consulter la carte radon par commune sur le site de l'IRSN"],"refs":[{"n":"C64","t":"Risque Radon"}]}},"natura2000":{"label":"Zone Natura 2000","rayon_m":0,"enjeu":{"id":"ctx-natura2000","nom":"Natura 2000 — Evaluation d'incidences obligatoire","ico":"🦋","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Projet dans ou à proximité d'un site Natura 2000 (ZSC ou ZPS)","Habitats et espèces d'intérêt communautaire potentiellement impactés","Massif vosgien : habitats forestiers et tourbières d'importance européenne"],"consequences":["Evaluation d'incidences Natura 2000 obligatoire (article L414-4 Code environnement)","Risque de refus si incidences significatives non compensées","Mesures ERC imposées pouvant représenter 5 à 20 % du coût total"]},"economique":{"facteurs":["Coût de l'évaluation d'incidences : 5 000 à 50 000 € selon la complexité","Mesures compensatoires si incidences résiduelles significatives"],"consequences":["Budget d'études majoré de 2 à 8 %","Allongement des délais d'instruction : 3 à 12 mois supplémentaires","Recours juridiques fréquents des associations de protection de la nature"]},"politique":{"facteurs":["DOCOB (Document d'Objectifs) du site Natura 2000 applicable","Instruction par la DDT 90 avec avis de la DREAL BFC","Contentieux administratif possible si évaluation insuffisante"],"consequences":["Annulation du PC par le tribunal administratif si évaluation manquante","Délais allongés : la DREAL BFC a 2 mois pour émettre son avis"]},"social":{"facteurs":["Valeur patrimoniale et identitaire des espaces naturels protégés","Tourisme vert lié à la qualité des milieux naturels vosgiens"],"consequences":["Opposition des associations naturalistes si impacts non justifiés","Valorisation touristique préservée si projet compatible avec Natura 2000"]}},"actions":["Réaliser une évaluation préliminaire d'incidences Natura 2000 dès l'avant-projet","Consulter le DOCOB du site concerné (DDT 90 ou site internet de la DREAL BFC)","Contacter la DDT 90 pour un cadrage préalable de l'évaluation","Vérifier si des contrats Natura 2000 peuvent s'appliquer au projet"],"refs":[{"n":"C52","t":"Protection patrimoine naturel"},{"n":"C55","t":"Inventaire patrimoine naturel"}]}},"znieff1":{"label":"ZNIEFF de type I","rayon_m":100,"enjeu":{"id":"ctx-znieff1","nom":"ZNIEFF type I — Zone naturelle d'intérêt écologique fort","ico":"🌿","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["ZNIEFF de type I : zone à forte valeur écologique, espèces rares ou menacées","Habitats naturels remarquables identifiés par l'inventaire national"],"consequences":["Obligation d'inventaires naturalistes complets (4 saisons minimum)","Risque de découverte d'espèces protégées nécessitant une dérogation CNPN"]},"economique":{"facteurs":["Coût des inventaires : 15 000 à 60 000 €","Dérogation espèces protégées (CNPN) : délais de 6 à 18 mois supplémentaires"],"consequences":["Allongement du calendrier et surcoût d'études significatif","Risque d'annulation du projet si impact résiduel non compensable"]},"politique":{"facteurs":["ZNIEFF n'est pas une protection réglementaire directe mais est fortement opposable","Jurisprudence : le juge administratif tient compte des ZNIEFF dans ses décisions"],"consequences":["Le PC peut être annulé si une ZNIEFF I est impactée sans évaluation sérieuse","Avis de la DREAL BFC systématiquement sollicité"]},"social":{"facteurs":["Valeur patrimoniale des espèces et habitats identifiés dans la ZNIEFF"],"consequences":["Opposition forte des associations naturalistes si ZNIEFF impactée"]}},"actions":["Commander des inventaires faune-flore sur 4 saisons avant tout dépôt","Éviter l'emprise sur la ZNIEFF si possible (variante de moindre impact)","Contacter la DREAL BFC pour un cadrage naturaliste préalable"],"refs":[{"n":"C55","t":"Inventaire patrimoine naturel"},{"n":"C52","t":"Protection C52"}]}},"znieff2":{"label":"ZNIEFF de type II","rayon_m":0,"enjeu":{"id":"ctx-znieff2","nom":"ZNIEFF type II — Grand ensemble naturel","ico":"🌲","niv":"moyen","tmin":2,"contexte_zone":true,"axes":{"environnement":{"facteurs":["ZNIEFF de type II : grand ensemble naturel à enjeu de biodiversité","Cohérence écologique à préserver à l'échelle du massif vosgien"],"consequences":["Inventaires naturalistes recommandés (2 saisons minimum)","Mesures d'intégration écologique du projet attendues"]},"economique":{"facteurs":["Coût d'inventaires allégés : 5 000 à 25 000 €"],"consequences":["Impact budgétaire modéré mais anticipation recommandée"]},"politique":{"facteurs":["ZNIEFF II : signal d'alerte pour le juge administratif en cas de recours"],"consequences":["Instruction renforcée si projet significatif dans une ZNIEFF II"]},"social":{"facteurs":["Cadre de vie naturel valorisé par les habitants du massif vosgien"],"consequences":["Attentes fortes des riverains sur la préservation du cadre naturel"]}},"actions":["Réaliser des inventaires naturalistes de printemps et d'été a minima","Intégrer des mesures d'évitement et de réduction dans la conception du projet"],"refs":[{"n":"C55","t":"Inventaire patrimoine naturel"}]}},"reservoir":{"label":"Réservoir de biodiversité TVB","rayon_m":0,"enjeu":{"id":"ctx-reservoir-tvb","nom":"Trame Verte — Réservoir de biodiversité","ico":"🌳","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Projet dans un réservoir de biodiversité de la Trame Verte (massifs vosgiens ou jurassiens)","Concentration d'espèces et d'habitats servant de source pour les corridors écologiques"],"consequences":["Fragmentation irréversible d'un réservoir clé si emprise significative","Obligation d'évaluation complète de la TVB dans les documents d'urbanisme"]},"economique":{"facteurs":["Mesures compensatoires TVB si fragmentation avérée","Coût des inventaires et de l'évaluation TVB : 10 000 à 40 000 €"],"consequences":["Compensation à ratio élevé si réservoir fragmenté (ratio 300 % possible)"]},"politique":{"facteurs":["SRCE BFC : préservation des réservoirs de biodiversité obligatoire","SCoT du 90 : déclinaison locale du SRCE"],"consequences":["Refus possible si projet fragmentant significativement un réservoir TVB"]},"social":{"facteurs":["Services écosystémiques rendus par les réservoirs (eau, air, loisirs)"],"consequences":["Dépréciation des services écosystémiques si réservoir dégradé"]}},"actions":["Identifier précisément les limites du réservoir TVB sur la carte SRCE BFC","Proposer une variante évitant le réservoir ou réduisant l'emprise au strict minimum","Contacter la DDT 90 service biodiversité pour un cadrage préalable"],"refs":[{"n":"C53","t":"Trame verte"},{"n":"C54","t":"Trame bleue"}]}},"foret":{"label":"Massif forestier","rayon_m":0,"enjeu":{"id":"ctx-foret","nom":"Couverture forestière — Défrichement soumis à autorisation","ico":"🌲","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Projet dans une zone forestière (43 % du territoire du 90 est boisé)","Défrichement soumis à autorisation préfectorale (Code forestier)","Impact carbone : 1 ha de forêt = 80 à 200 tCO2 stockées"],"consequences":["Perte de stockage carbone et de services écosystémiques forestiers","Compensation forestière obligatoire si défrichement autorisé (ratio 1:2 à 1:5)"]},"economique":{"facteurs":["Coût de la compensation forestière : 3 000 à 15 000 €/ha","Délai d'instruction de l'autorisation de défrichement : 3 à 6 mois"],"consequences":["Surcoût et délai si défrichement nécessaire","Valeur forestière à déduire du prix de vente ou à compenser"]},"politique":{"facteurs":["Code forestier L341-1 : autorisation de défrichement obligatoire pour les bois > 0,5 ha","Instruction par la DDT 90 service forêt","Compensation forestière fixée par l'arrêté d'autorisation"],"consequences":["Refus possible si forêt de protection ou forêt domaniale","Obligation de reboisement compensateur si autorisation accordée"]},"social":{"facteurs":["Forêt vosgienne : espace de loisirs et d'identité pour les habitants","Emplois dans la filière bois locale (sylviculture, scieries)"],"consequences":["Opposition possible des riverains si défrichement visible","Impact sur le tourisme vert lié à la forêt vosgienne"]}},"actions":["Déposer une demande d'autorisation de défrichement à la DDT 90 si surface > 0,5 ha","Contacter l'ONF ou le CRPF selon le statut de la forêt (publique/privée)","Prévoir une compensation forestière dans le budget du projet"],"refs":[{"n":"C57","t":"Couverture forestière"}]}},"zone_humide":{"label":"Zone humide probable","rayon_m":0,"enjeu":{"id":"ctx-zone-humide","nom":"Zone humide — Loi sur l'eau et compensation","ico":"🦆","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Projet dans une zone humide probable (carte DDT 90 — Atlas C46)","Zones humides : stockage carbone, régulation des crues, biodiversité exceptionnelle","50 % des zones humides françaises détruites depuis 1960"],"consequences":["Impact sur les services écosystémiques : régulation hydrique, épuration, biodiversité","Compensation à ratio 150 à 200 % minimum si destruction inévitable","Procédure IOTA longue si surface > 1 ha"]},"economique":{"facteurs":["Délimitation précise : sondages pédologiques + relevés floristiques (3 000 à 10 000 €)","Dossier IOTA (déclaration ou autorisation) : 5 000 à 30 000 €","Compensation : acquisition et restauration de zones humides (ratio 150 à 200 %)"],"consequences":["Renchérissement significatif si zone humide avérée dans l'emprise","Projet à requalifier ou déplacer si coût de compensation prohibitif"]},"politique":{"facteurs":["Loi sur l'eau (IOTA) : déclaration si 0,1 à 1 ha, autorisation si > 1 ha","Instruction par la DDT 90 service eau","Séquence ERC obligatoire : éviter en priorité"],"consequences":["Refus possible si zone humide de grand intérêt écologique et alternative existante","Enquête publique si autorisation IOTA requise"]},"social":{"facteurs":["Rôle tampon des zones humides contre les inondations : protège les riverains","Biodiversité des zones humides : richesse patrimoniale locale"],"consequences":["Aggravation des inondations en aval si zone humide détruite","Opposition des associations si zone humide détruite sans compensation sérieuse"]}},"actions":["Faire délimiter précisément la zone humide par un bureau d'études agréé (sondages + flore)","Éviter l'emprise sur la zone humide (implantation alternative)","Si destruction inévitable : déposer un dossier IOTA à la DDT 90 avec mesures compensatoires","Contacter l'Agence de l'eau RMC pour un financement de la compensation"],"refs":[{"n":"C46","t":"Zones humides probables"},{"n":"C43","t":"SAGE Allan"}]}},"nitrates":{"label":"Zone vulnérable aux nitrates","rayon_m":0,"enjeu":{"id":"ctx-nitrates","nom":"Zone vulnérable nitrates — Programme d'action","ico":"🌱","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone vulnérable aux nitrates : pollution des eaux souterraines et de surface par l'agriculture","Bassin versant de l'Allan ou Bourbeuse : eaux sensibles à l'eutrophisation"],"consequences":["Risque de contamination du captage AEP en aval si bonnes pratiques non respectées","Prolifération algale dans les cours d'eau si nitrates excessifs"]},"economique":{"facteurs":["Programme d'actions nitrates : contraintes d'épandage et de stockage","Coût de mise en conformité des stockages d'effluents : 10 000 à 50 000 €"],"consequences":["Surcoût opérationnel pour les exploitants agricoles en zone vulnérable","Aide MAEC possible pour les pratiques vertueuses : 80 à 160 €/ha"]},"politique":{"facteurs":["Directive Nitrates (1991) : programme d'actions régional opposable","Contrôle DDT 90 dans le cadre de la conditionnalité renforcée PAC 2023","Arrêté préfectoral annuel fixant les périodes d'épandage interdites"],"consequences":["Sanction PAC si non-respect des BCAE (réduction des paiements directs)","Mise en demeure si pollution grave avérée"]},"social":{"facteurs":["Qualité de l'eau potable pour les habitants du bassin versant","Initiative 'L'Eau d'Ici' (CCST) : coopération agriculteurs-collectivités"],"consequences":["Confiance des consommateurs dans l'eau du robinet locale","Coopération renforcée si agriculteurs engagés dans des démarches collectives"]}},"actions":["Vérifier la localisation en zone vulnérable (DDT 90 ou carte interactive Géoportail)","Respecter le 5e programme d'actions nitrates : périodes d'épandage, doses, stockages","Adhérer à la démarche 'L'Eau d'Ici' (CCST) pour un accompagnement personnalisé","Contacter la Chambre d'Agriculture 90 pour le plan de fumure"],"refs":[{"n":"C40","t":"Zones vulnérables nitrates"},{"n":"C48","t":"Prélèvements eau"}]}},"sage":{"label":"Périmètre SAGE Allan","rayon_m":0,"enjeu":{"id":"ctx-sage","nom":"SAGE Allan — Schéma d'Aménagement et Gestion des Eaux","ico":"💧","niv":"moyen","tmin":2,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Projet dans le périmètre du SAGE Allan (couvre tout le Territoire de Belfort)","Objectifs DCE : 15 % seulement des masses d'eau en bon état écologique dans le 90"],"consequences":["Obligation de compatibilité du projet avec les orientations du SAGE","Vigilance sur les rejets, prélèvements et imperméabilisation"]},"economique":{"facteurs":["Etudes hydrauliques si projet proche d'un cours d'eau (IOTA)","Financement possible par l'Agence de l'eau RMC si projet de restauration"],"consequences":["Dossier loi sur l'eau potentiellement requis selon l'impact hydraulique"]},"politique":{"facteurs":["SAGE approuvé : règlement opposable aux tiers","Commission Locale de l'Eau (CLE) : instance de gouvernance du SAGE Allan"],"consequences":["Compatibilité du PLU et des PC avec le SAGE Allan obligatoire"]},"social":{"facteurs":["Gestion transfrontalière de l'eau (Suisse, Doubs, Haut-Rhin)"],"consequences":["Coopération internationale indispensable pour l'état des masses d'eau"]}},"actions":["Vérifier la compatibilité du projet avec les orientations du SAGE Allan (DDT 90)","Contacter la CLE (Commission Locale de l'Eau) pour les projets impactant les cours d'eau","Déposer un dossier IOTA si le projet affecte le régime hydraulique"],"refs":[{"n":"C43","t":"SAGE Allan"},{"n":"C44","t":"Etat écologique masses eau"}]}},"captage_aep":{"label":"Captage AEP","rayon_m":500,"enjeu":{"id":"ctx-captage-aep","nom":"Captage AEP — Périmètre de protection","ico":"🚰","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Projet à proximité d'un captage d'alimentation en eau potable","Périmètre de protection immédiate (PPI), rapprochée (PPR) ou éloignée (PPE) possible"],"consequences":["Activités interdites ou restreintes dans les périmètres de protection","Pollution accidentelle pouvant rendre le captage non conforme"]},"economique":{"facteurs":["Coût de dépollution d'un captage contaminé : plusieurs millions €","Restrictions pouvant rendre le projet non réalisable dans le PPI"],"consequences":["Projet incompatible avec le PPI : refus systématique","Prescriptions spéciales dans le PPR : surcoût de 5 à 15 %"]},"politique":{"facteurs":["Périmètres de protection définis par arrêté préfectoral (Code de la santé publique)","Consultation ARS BFC obligatoire pour les projets dans les périmètres","Hydrogéologue agréé requis pour les études"],"consequences":["Refus systématique dans le PPI et les PPR pour les activités polluantes","Déclaration d'utilité publique protège le captage contre les activités incompatibles"]},"social":{"facteurs":["Santé publique : qualité de l'eau du robinet pour les habitants raccordés au captage"],"consequences":["Coupure d'eau potable si captage contaminé (impact sur toute la commune)"]}},"actions":["Identifier le captage le plus proche et ses périmètres de protection (DDT 90 ou ARS BFC)","Consulter l'ARS BFC avant tout projet dans un périmètre de protection","Éviter toute activité polluante dans le PPR sans étude hydrogéologique préalable"],"refs":[{"n":"C48","t":"Prélèvements eau et captages AEP"}]}},"perimetre_MH":{"label":"Périmètre MH 500m","rayon_m":0,"enjeu":{"id":"ctx-mh-perimetre","nom":"Monument Historique — Avis conforme ABF obligatoire","ico":"🏛","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Projet dans le périmètre de protection de 500 m d'un Monument Historique (classé ou inscrit)","Covisibilité possible avec la Citadelle Vauban ou le Lion de Belfort"],"consequences":["Modification du paysage patrimonial si projet mal intégré","Obligation de respecter les prescriptions architecturales de l'ABF"]},"economique":{"facteurs":["Coût d'un architecte du patrimoine recommandé : +5 à +15 % des honoraires","Prescriptions ABF pouvant imposer des matériaux traditionnels plus coûteux"],"consequences":["Surcoût architectural si matériaux ou formes spécifiques imposés","Valorisation patrimoniale du bien si intégration réussie"]},"politique":{"facteurs":["Avis conforme de l'ABF (UDAP 90) obligatoire : son refus bloque le PC","Architecte des Bâtiments de France (ABF) : pouvoir discrétionnaire sur l'intégration","Recours possible auprès du préfet de région si désaccord avec l'ABF"],"consequences":["PC refusé si l'ABF émet un avis défavorable (avis conforme)","Délai d'instruction majoré : l'ABF a 2 mois pour rendre son avis","Modification imposée du projet (hauteur, matériaux, couleurs, toiture)"]},"social":{"facteurs":["Patrimoine architectural belfortain : identité culturelle forte","Tourisme patrimonial lié à la Citadelle Vauban (site majeur)"],"consequences":["Préservation de la qualité paysagère appréciée par les habitants","Cohérence architecturale du centre historique de Belfort"]}},"actions":["Prendre rendez-vous avec l'UDAP 90 (ABF) en amont du dépôt du PC","Consulter les prescriptions architecturales locales (AVAP, PSMV si applicables)","Faire appel à un architecte du patrimoine pour la conception","UDAP 90 : 03 84 28 70 01 — udap-90@culture.gouv.fr"],"refs":[{"n":"C88","t":"Monuments historiques"},{"n":"C90","t":"Archéologie préventive"}]}},"MH_classe":{"label":"Monument Historique classé","rayon_m":500,"enjeu":{"id":"ctx-mh-classe","nom":"Monument Historique classé — Protection renforcée","ico":"🏰","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Proximité immédiate d'un Monument Historique classé","Covisibilité directe potentielle avec le monument"],"consequences":["Contraintes architecturales maximales imposées par l'ABF","Valorisation paysagère possible si projet de qualité"]},"economique":{"facteurs":["Contraintes architecturales imposant des matériaux nobles","Valorisation patrimoniale du bien bien intégré"],"consequences":["Surcoût de construction si prescriptions ABF strictes","Plus-value patrimoniale à long terme si intégration réussie"]},"politique":{"facteurs":["Avis conforme ABF = pouvoir de blocage absolu du projet","Recours préfet possible si avis ABF disproportionné"],"consequences":["Blocage du projet possible si ABF émet un avis défavorable non motivé"]},"social":{"facteurs":["Symbole identitaire fort (Citadelle Vauban = carte postale de Belfort)"],"consequences":["Réaction sociale forte si projet perçu comme dégradant le monument"]}},"actions":["Rencontrer l'ABF en phase esquisse, avant tout dépôt","Proposer une intégration architecturale soignée et documentée","Viser la labellisation 'Architecture remarquable' si le projet l'y prête"],"refs":[{"n":"C88","t":"Monuments historiques"}]}},"zppa":{"label":"Zone de Présomption Archéologique","rayon_m":0,"enjeu":{"id":"ctx-zppa","nom":"Archéologie préventive — ZPPA applicable","ico":"🏺","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Projet dans une Zone de Présomption de Prescription Archéologique (ZPPA)","Vestiges archéologiques potentiels dans le sous-sol"],"consequences":["Découverte fortuite de vestiges pouvant stopper le chantier","Obligation de préserver les éléments archéologiques découverts"]},"economique":{"facteurs":["Diagnostic archéologique préventif : 5 000 à 30 000 € (financé en partie par l'aménageur)","Fouille archéologique si vestiges significatifs : 50 000 à plusieurs centaines de milliers d'€"],"consequences":["Délai supplémentaire de 3 à 18 mois si fouilles requises","Coût imprévisible si vestiges importants découverts"]},"politique":{"facteurs":["Loi 2001-44 : archéologie préventive obligatoire dans les ZPPA","Instruction par la DRAC BFC (Direction Régionale des Affaires Culturelles)","Prescriptions émises par le Préfet de région"],"consequences":["PC assorti d'une prescription archéologique préalable aux travaux","Arrêt de chantier obligatoire en cas de découverte fortuite"]},"social":{"facteurs":["Patrimoine archéologique local : voie romaine, vestiges médiévaux","Valorisation possible des découvertes dans un musée local"],"consequences":["Intérêt scientifique et culturel des fouilles pour le territoire","Retards de chantier vécus négativement par les riverains et le maître d'ouvrage"]}},"actions":["Déclarer le projet à la DRAC BFC dès le dépôt du PC si en ZPPA","Anticiper un délai supplémentaire de 3 à 6 mois pour le diagnostic","Prévoir une provision pour fouilles dans le budget : 5 % du coût de construction minimum"],"refs":[{"n":"C90","t":"Archéologie préventive"}]}},"zone_AU":{"label":"Zone d'urbanisation future (AU)","rayon_m":0,"enjeu":{"id":"ctx-zone-au","nom":"Zone AU — Conditions d'ouverture à l'urbanisation","ico":"📋","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone AU : secteur naturel ou agricole ouvert progressivement à l'urbanisation","Conditions d'ouverture : viabilisation des réseaux, compatibilité SCoT"],"consequences":["Consommation foncière comptabilisée dans les objectifs ZAN","Obligation de gestion des eaux pluviales à la source dès la création de la zone"]},"economique":{"facteurs":["Coût de viabilisation d'une zone AU : 50 000 à 200 000 €/ha","Charges de viabilisation pesant sur l'aménageur ou la collectivité"],"consequences":["Budget de viabilisation à intégrer dans le bilan de l'opération","Possibilité de mutualisation avec d'autres opérations dans la zone"]},"politique":{"facteurs":["Zone 1AU : ouverte à l'urbanisation si réseaux suffisants","Zone 2AU : réservée, ouverture conditionnée à la révision du PLU","Modification ou révision du PLU si zone 2AU"],"consequences":["Délai de 6 à 24 mois si révision du PLU nécessaire pour ouvrir une 2AU","PC refusé en zone 2AU sans modification préalable du PLU"]},"social":{"facteurs":["Développement contrôlé et planifié du territoire","Accueil de nouveaux habitants et maintien des services de proximité"],"consequences":["Attractivité résidentielle renforcée si zone AU bien localisée","Tensions foncières possibles si rareté des zones AU disponibles"]}},"actions":["Vérifier si la zone AU est de type 1AU (opérable) ou 2AU (bloquée)","Contacter le service urbanisme de la mairie ou de l'EPCI compétent","Anticiper les délais si révision du PLU nécessaire"],"refs":[{"n":"C65","t":"Documents urbanisme"},{"n":"C69","t":"Sobriété foncière"}]}},"friche":{"label":"Friche inventoriée","rayon_m":100,"enjeu":{"id":"ctx-friche-proche","nom":"Friche à proximité — Opportunité de recyclage foncier","ico":"♻","niv":"faible","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Friche industrielle ou commerciale proche du projet","Opportunité de recyclage foncier préférable à l'extension sur terrain vierge (ZAN)"],"consequences":["Choix de la friche = consommation ZAN nulle","Possible pollution à diagnostiquer avant reconversion"]},"economique":{"facteurs":["Fonds Friches ADEME : financement du différentiel de coût friche vs terrain vierge"],"consequences":["Coût global potentiellement comparable si Fonds Friches obtenu"]},"politique":{"facteurs":["Loi ZAN : obligation de justifier l'absence d'alternative sur friche avant extension"],"consequences":["Argument fort en instruction si friche disponible non utilisée"]},"social":{"facteurs":["Requalification urbaine bénéfique pour le quartier"],"consequences":["Amélioration de l'image et du cadre de vie si friche reconvertie"]}},"actions":["Consulter le portail BIGAN de la DDT 90 pour l'inventaire des friches","Evaluer si la friche proche est mobilisable avant de choisir un terrain vierge","Contacter l'EPF BFC pour le portage foncier de la friche"],"refs":[{"n":"C70","t":"Réhabilitation friches"},{"n":"C71","t":"Friches dans le 90"}]}},"bruit_1":{"label":"Secteur bruit catégorie 1","rayon_m":0,"enjeu":{"id":"ctx-bruit","nom":"Nuisances sonores — Secteur affecté par le bruit des transports","ico":"🔊","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Secteur classé au bruit des infrastructures de transport (cat. 1 à 5)","A36 : infrastructure de catégorie 1 (>100 000 veh/j) — secteur de 300 m"],"consequences":["Niveaux de bruit importants : Lden > 65 dB(A) dans les secteurs les plus exposés","Impact sur la santé et la qualité de vie des futurs occupants"]},"economique":{"facteurs":["Isolation acoustique renforcée obligatoire : DnT,A ≥ 40 dB(A) en cat. 1","Surcoût isolation acoustique : 5 000 à 20 000 € selon la surface"],"consequences":["Renchérissement du projet par l'isolation acoustique renforcée","Valeur vénale réduite si bruit perceptible malgré l'isolation"]},"politique":{"facteurs":["Classement sonore opposable : arrêté préfectoral annexé au PLU","Attestation acoustique obligatoire à joindre au PC pour les logements","Norme NF S 31-010 et arrêté du 25 avril 2003"],"consequences":["PC refusé si attestation acoustique manquante","Réception de chantier conditionnée aux mesures acoustiques in situ"]},"social":{"facteurs":["Exposition chronique au bruit : effets néfastes sur la santé (OMS : > 65 dB(A) = risque cardiaque)","Confort acoustique des occupants : facteur de qualité de vie majeur"],"consequences":["Perturbation du sommeil, stress, troubles cardiovasculaires si exposition chronique","Obligation d'information des futurs acquéreurs sur le classement sonore"]}},"actions":["Vérifier le classement sonore de la rue (annexe PLU ou DDT 90)","Faire réaliser une étude acoustique par un bureau agréé dès l'avant-projet","Prévoir une orientation des pièces de vie côté calme (loin de la voie bruyante)","Intégrer les éléments acoustiques dans le dossier PC (attestation obligatoire)"],"refs":[{"n":"C84","t":"Carte stratégique bruit"},{"n":"C85","t":"Classement sonore"}]}},"trafic_fort":{"label":"Axe à fort trafic (>20 000 veh/j)","rayon_m":100,"enjeu":{"id":"ctx-trafic-fort","nom":"Axe à fort trafic — Pollution air et bruit","ico":"🚛","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Axe routier à trafic très important (>20 000 veh/j) à proximité immédiate","Emissions de NO2, PM10, PM2.5 en quantités significatives"],"consequences":["Zone de dépassement potentiel des valeurs limites de qualité de l'air","Aggravation des problèmes respiratoires pour les occupants exposés"]},"economique":{"facteurs":["Systèmes de ventilation et filtration de l'air recommandés","VMC double flux avec filtre HEPA recommandée"],"consequences":["Surcoût ventilation : 3 000 à 8 000 €","Valeur vénale impactée par la pollution atmosphérique et le bruit"]},"politique":{"facteurs":["Carte Stratégique de l'Air (ATMO BFC) : diagnostic de la qualité de l'air","Plan de Protection de l'Atmosphère (PPA) BFC si zone de dépassement"],"consequences":["Obligation d'information sur la qualité de l'air dans certaines communes","Restriction possible des activités polluantes si PPA applicable"]},"social":{"facteurs":["Exposition quotidienne à la pollution de l'air pour les riverains","Pédestrians, cyclistes et résidents les plus exposés"],"consequences":["Risques respiratoires et cardiovasculaires pour les populations exposées","Inégalités sociales d'exposition (logements sociaux souvent près des axes"]}},"actions":["Consulter la Carte Stratégique de l'Air d'ATMO BFC pour l'adresse exacte","Installer une VMC double flux avec filtration en cas de fort trafic proche","Orienter les chambres et espaces de vie côté opposé à l'axe routier"],"refs":[{"n":"C18","t":"Qualité de l'air"},{"n":"C82","t":"Flux véhicules"},{"n":"C84","t":"Bruit stratégique"}]}},"qpv":{"label":"Quartier Prioritaire de la Ville","rayon_m":0,"enjeu":{"id":"ctx-qpv","nom":"Quartier Prioritaire (QPV) — Politique de la ville","ico":"🏘","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone urbaine dense à potentiel de renouvellement urbain (QPV)","Enjeux de désimperméabilisation et de végétalisation dans les QPV belfortains"],"consequences":["Opportunité de renaturation et d'amélioration du cadre de vie","Potentiel de Fonds vert (volet cadre de vie) pour les projets de renouvellement"]},"economique":{"facteurs":["Aides spécifiques ANRU (Agence Nationale Rénovation Urbaine) dans les QPV","Exonérations fiscales ZFU-TE possibles pour les entreprises en QPV"],"consequences":["Financement ANRU possible si projet de rénovation urbaine","Attractivité commerciale réduite si QPV stigmatisé"]},"politique":{"facteurs":["7 QPV dans le Territoire de Belfort (révision 2024) — 15 200 habitants concernés","Contrats de ville : gouvernance multi-acteurs (État, EPCI, associations)","Programme ANRU : rénovation urbaine des QPV"],"consequences":["Financements dédiés accessibles si projet cohérent avec le contrat de ville","Concertation avec les habitants du QPV obligatoire pour les projets ANRU"]},"social":{"facteurs":["Populations confrontées aux inégalités sociales et économiques","Forte densité, mixité sociale à renforcer","Besoin en équipements, services de proximité et espaces verts"],"consequences":["Amélioration de la qualité de vie si projet bien conçu et concerté","Risque de gentrification si rénovation sans logement social maintenu"]}},"actions":["Contacter le service politique de la ville de Grand Belfort pour les financements ANRU","Intégrer une démarche de concertation avec les habitants du QPV","Vérifier si le projet est éligible au Fonds vert volet cadre de vie"],"refs":[{"n":"C80","t":"Quartiers prioritaires de la ville"}]}},"eolien_etude":{"label":"Zone d'étude éolienne","rayon_m":0,"enjeu":{"id":"ctx-eolien-zone","nom":"Zone d'étude éolienne — Enjeux de covisibilité et de distance","ico":"💨","niv":"moyen","tmin":2,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone identifiée comme favorable au développement éolien (Atlas C24)","Présence de massifs boisés offrant un potentiel de vent à 100 m de hauteur"],"consequences":["Etudes naturalistes et paysagères approfondies nécessaires","Distances minimales : 500 m des habitations, exclusion des zones Natura 2000"]},"economique":{"facteurs":["Coût d'un parc éolien : 1,5 à 2,5 M€/MW installé","Recettes IFER et TFPNB pour les communes d'accueil"],"consequences":["Retombées économiques locales significatives (100 000 à 500 000 €/an/commune)"]},"politique":{"facteurs":["ZAENR (Zones d'Accélération ENR) à délibérer par les communes avant fin 2025","Sraddet BFC : objectif 127 GWh/an PV dans le 90 — éolien à développer"],"consequences":["Commune non délibérante = projet plus difficile à instruire favorablement"]},"social":{"facteurs":["Acceptabilité sociale de l'éolien : enjeu majeur dans le 90 (paysage, patrimoine)"],"consequences":["Recours fréquents si concertation insuffisante en amont"]}},"actions":["Vérifier si la commune a délibéré sur les ZAENR","Engager une concertation précoce avec les élus et riverains","Commander une étude de vent (mât de mesure) sur 12 mois minimum"],"refs":[{"n":"C24","t":"Potentiel éolien"},{"n":"C21","t":"Etat lieux ENR"}]}},"moustique":{"label":"Zone surveillance moustique tigre","rayon_m":0,"enjeu":{"id":"ctx-moustique","nom":"Moustique tigre — Enjeu sanitaire et conception du projet","ico":"🦟","niv":"faible","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone de surveillance active du moustique tigre (Aedes albopictus) — Atlas C91","Présence confirmée en Nord Franche-Comté depuis 2023"],"consequences":["Vecteur de dengue, chikungunya, zika (5 cas dengue importés en 2024 en NFC)","Eaux stagnantes dans le projet = gîte larvaire potentiel"]},"economique":{"facteurs":["Coût de la démoustication professionnelle si prolifération"],"consequences":["Surcoût de gestion des espaces paysagers si eaux stagnantes non maîtrisées"]},"politique":{"facteurs":["Signalement obligatoire à l'ARS BFC en cas de foyer de dengue locale"],"consequences":["Responsabilité du gestionnaire si gîtes larvaires non traités sur l'emprise"]},"social":{"facteurs":["Nuisance pour les futurs usagers du projet (piqûres, risque sanitaire)"],"consequences":["Confort d'usage dégradé si moustique tigre non pris en compte dans la conception"]}},"actions":["Supprimer toute eau stagnante dans la conception du projet (soucoupes, gouttières, bassins mal drainés)","Utiliser des insecticides larvicides sur les gîtes résiduels incompressibles","Signaler tout gîte à l'ARS BFC ou sur le site signalement-moustique.anses.fr"],"refs":[{"n":"C91","t":"Moustique tigre — enjeu sanitaire"}]}}};
 
 /* ── Point-in-polygon (algorithme ray casting) ── */
 function pointInPolygon(lat, lng, polygonCoords) {
@@ -4165,7 +3178,7 @@ function pointInPolygon(lat, lng, polygonCoords) {
   return inside;
 }
 
-/* ── Distance entre deux points (km) ── */
+/** @deprecated Utiliser distanceKm() */
 function distLatLng(lat1, lng1, lat2, lng2) {
   var R = 6371;
   var dLat = (lat2 - lat1) * Math.PI / 180;
@@ -4217,6 +3230,403 @@ function distPointSegment(px, py, ax, ay, bx, by) {
   return distLatLng(px, py, ax + t*dx, ay + t*dy);
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   AXES MAJEURS — Détection proximité autoroutes, nationales, ferroviaire
+   Influence : enjeux, contacts, checklist, simulation, rapport
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. DÉTECTION ─────────────────────────────────────────────────────────── */
+function detecterAxesMajeurs(lat, lng) {
+  var res = { aProximite: false, autoroutes: [], nationales: [], ferroviaire: [] };
+  if (!COUCHES_DATA || !lat || !lng) return res;
+
+  var seuils = { autoroute: 500, nationale: 300, ferroviaire: 500 };
+  var typesAxes = {
+    autoroute:   ['autoroute'],
+    nationale:   ['nationale'],
+    ferroviaire: ['TGV', 'TER'],
+  };
+
+  Object.keys(typesAxes).forEach(function(axe) {
+    var types = typesAxes[axe];
+    var seuil = seuils[axe];
+    var sources = [COUCHES_DATA['organisation'], COUCHES_DATA['mobilite']];
+    sources.forEach(function(couche) {
+      if (!couche || !couche.features) return;
+      couche.features.forEach(function(f) {
+        var ftype = f.properties && f.properties.type;
+        if (types.indexOf(ftype) === -1) return;
+        if (featureContientPoint(f, lat, lng, seuil)) {
+          var nom = f.properties.nom || ftype;
+          var liste = res[axe === 'ferroviaire' ? 'ferroviaire' : axe + 's'];
+          if (liste && !liste.some(function(x){ return x.nom === nom; })) {
+            liste.push({ nom: nom, type: ftype, dist: seuil });
+          }
+        }
+      });
+    });
+  });
+
+  res.aProximite = res.autoroutes.length > 0 || res.nationales.length > 0 || res.ferroviaire.length > 0;
+  return res;
+}
+
+/* ── 2. ENJEUX CONTEXTUELS ────────────────────────────────────────────────── */
+function genererEnjeuxAxesMajeurs(axesMajeurs, taille, typeProjet) {
+  var enjeux = [];
+  if (!axesMajeurs || !axesMajeurs.aProximite) return enjeux;
+  var typesLogement = ['logement', 'equipement', 'zae', 'friche'];
+
+  /* Autoroute < 500m */
+  if (axesMajeurs.autoroutes.length > 0 && typesLogement.indexOf(typeProjet) !== -1) {
+    enjeux.push({
+      id: 'axe-autoroute-bruit', nom: 'Autoroute à proximité — Bruit et pollution',
+      ico: '🛣', niv: 'eleve', tmin: 1, _transport_ctx: true,
+      axes: {
+        environnement: {
+          facteurs: [
+            'Projet à moins de 500 m d\'une autoroute (' + axesMajeurs.autoroutes.map(function(a){return a.nom;}).join(', ') + ')',
+            'Niveaux sonores Lden > 68 dB(A) en façade côté autoroute — catégorie 1 du classement sonore',
+            'Concentrations en NO2, PM10, PM2.5 dépassant les valeurs guides OMS à moins de 300 m',
+          ],
+          consequences: [
+            'Isolation acoustique DnT,A ≥ 40 dB(A) obligatoire (arrêté du 25/04/2003)',
+            'Qualité de l\'air intérieur dégradée sans ventilation double flux avec filtration',
+            'Dépréciation de 5 à 15 % de la valeur vénale des biens côté autoroute',
+          ],
+        },
+        economique: {
+          facteurs: [
+            'Surcoût isolation acoustique renforcée : 8 000 à 25 000 € selon surface',
+            'VMC double flux avec filtration HEPA recommandée : 4 000 à 9 000 €',
+            'Étude acoustique obligatoire avant dépôt PC (logements et ERP)',
+          ],
+          consequences: [
+            'Renchérissement global du projet de 3 à 10 %',
+            'Attestation acoustique à joindre au PC — absence = refus',
+            'Surprime assurance habitation en zone de bruit',
+          ],
+        },
+        politique: {
+          facteurs: [
+            'Classement sonore opposable : arrêté préfectoral annexé au PLU',
+            'Décret 2011-604 : attestation acoustique obligatoire pour les logements neufs',
+            'Plan de Prévention du Bruit dans l\'Environnement (PPBE) applicable',
+          ],
+          consequences: [
+            'PC refusé sans attestation acoustique conforme',
+            'Consultation obligatoire de la DIR Est pour tout accès sur autoroute',
+            'Obligation d\'information des futurs acquéreurs sur le classement sonore',
+          ],
+        },
+        social: {
+          facteurs: [
+            'Exposition chronique au bruit autoroutier : risque cardiovasculaire + 20 % (OMS)',
+            'Perturbation du sommeil et des apprentissages pour les enfants riverains',
+          ],
+          consequences: [
+            'Obligation de conception bioclimatique : pièces de vie côté calme',
+            'Qualité de vie dégradée si isolation insuffisante',
+          ],
+        },
+      },
+      actions: [
+        'Commander une étude acoustique dès l\'avant-projet (bureau agréé)',
+        'Orienter les pièces de vie côté opposé à l\'autoroute',
+        'Installer une VMC double flux avec filtre HEPA',
+        'Contacter la DIR Est : 03 88 13 60 00 pour tout projet d\'accès',
+        'Vérifier le classement sonore dans l\'annexe bruit du PLU',
+      ],
+      refs: [{ n: 'C82', t: 'Flux véhicules' }, { n: 'C84', t: 'Carte bruit' }, { n: 'C85', t: 'Classement sonore' }],
+    });
+  }
+
+  /* Nationale < 300m */
+  if (axesMajeurs.nationales.length > 0 && typesLogement.indexOf(typeProjet) !== -1) {
+    enjeux.push({
+      id: 'axe-nationale-trafic', nom: 'Route nationale — Trafic et qualité de l\'air',
+      ico: '🛤', niv: 'moyen', tmin: 1, _transport_ctx: true,
+      axes: {
+        environnement: {
+          facteurs: [
+            'Projet à moins de 300 m d\'une route nationale (' + axesMajeurs.nationales.map(function(a){return a.nom;}).join(', ') + ')',
+            'Axe à fort trafic (>20 000 veh/j) — émissions NO2 et PM significatives',
+            'Classement sonore catégorie 2 ou 3 selon le trafic',
+          ],
+          consequences: [
+            'Isolation acoustique DnT,A ≥ 35 à 38 dB(A) selon la catégorie',
+            'Ventilation double flux recommandée pour la qualité de l\'air intérieur',
+          ],
+        },
+        economique: {
+          facteurs: [
+            'Surcoût isolation acoustique : 4 000 à 15 000 €',
+            'Étude acoustique recommandée en phase esquisse',
+          ],
+          consequences: [
+            'Impact modéré sur la valeur vénale côté nationale (2 à 8 %)',
+          ],
+        },
+        politique: {
+          facteurs: [
+            'Classement sonore arrêté préfectoral opposable',
+            'Consultation DDT 90 mobilités pour les accès sur voie nationale',
+          ],
+          consequences: [
+            'Attestation acoustique requise pour les logements',
+            'Accord du gestionnaire voirie requis pour tout accès direct',
+          ],
+        },
+        social: {
+          facteurs: [
+            'Nuisances sonores diurnes et nocturnes pour les futurs occupants',
+          ],
+          consequences: [
+            'Conception bioclimatique : baies vitrées et terrasses côté calme',
+          ],
+        },
+      },
+      actions: [
+        'Vérifier le classement sonore de la voie (annexe PLU)',
+        'Réaliser une étude acoustique avant le dépôt du PC',
+        'Consulter DDT 90 — mobilités pour l\'accès sur voie nationale',
+        'Prévoir une VMC double flux si trafic > 20 000 veh/j',
+      ],
+      refs: [{ n: 'C82', t: 'Flux véhicules' }, { n: 'C84', t: 'Carte bruit' }],
+    });
+  }
+
+  /* Ferroviaire < 500m */
+  if (axesMajeurs.ferroviaire.length > 0 && typesLogement.indexOf(typeProjet) !== -1) {
+    enjeux.push({
+      id: 'axe-ferroviaire-nuisances', nom: 'Axe ferroviaire — Nuisances et sécurité',
+      ico: '🚆', niv: 'moyen', tmin: 1, _transport_ctx: true,
+      axes: {
+        environnement: {
+          facteurs: [
+            'Projet à moins de 500 m d\'une voie ferrée (' + axesMajeurs.ferroviaire.map(function(a){return a.nom;}).join(', ') + ')',
+            'Vibrations et bruit de roulement transmis au bâtiment selon la nature des sols',
+            'Classement sonore ferroviaire catégorie 1 si LGV, 2 ou 3 si ligne régionale',
+          ],
+          consequences: [
+            'Isolation vibratoire et acoustique nécessaire selon la distance',
+            'Risque de tassement différentiel des fondations si sols meubles',
+          ],
+        },
+        economique: {
+          facteurs: [
+            'Surcoût isolation acoustique et vibratoire : 5 000 à 20 000 €',
+            'Étude de sol recommandée si voie ferrée < 100 m (vibrations)',
+          ],
+          consequences: [
+            'Dépréciation possible de 3 à 8 % selon intensité du trafic ferroviaire',
+          ],
+        },
+        politique: {
+          facteurs: [
+            'Servitude ferroviaire I1 : inconstructibilité dans un périmètre variable',
+            'Consultation SNCF Réseau obligatoire si projet dans la bande de sécurité',
+            'Plan d\'Exposition au Bruit (PEB) ferroviaire si LGV présente',
+          ],
+          consequences: [
+            'Accord préalable SNCF Réseau requis pour construire près des voies',
+            'Délai d\'instruction majoré si servitude ferroviaire applicable',
+          ],
+        },
+        social: {
+          facteurs: [
+            'Nuisances sonores variables selon les horaires de circulation',
+            'Vibrations transmises ressenties jusqu\'à 100-200 m selon les sols',
+          ],
+          consequences: [
+            'Gêne nocturne si circulation de trains de fret',
+          ],
+        },
+      },
+      actions: [
+        'Vérifier l\'existence d\'une servitude ferroviaire I1 sur la parcelle',
+        'Contacter SNCF Réseau pour les projets à moins de 100 m des voies',
+        'Commander une étude de vibrations si distance < 50 m',
+        'Vérifier le classement sonore ferroviaire dans l\'annexe PLU',
+      ],
+      refs: [{ n: 'C84', t: 'Carte bruit' }, { n: 'C85', t: 'Classement sonore' }],
+    });
+  }
+
+  return enjeux;
+}
+
+/* ── 3. CONTACTS ──────────────────────────────────────────────────────────── */
+function injecterContactsAxesMajeurs(axesMajeurs) {
+  if (!axesMajeurs || !axesMajeurs.aProximite) return;
+  var ctx = document.getElementById('contacts-ctx');
+  if (!ctx) return;
+
+  var html = '<div class="contact-groupe"><div class="contact-groupe-titre"><span class="groupe-ico">🛣</span><span>Axes de transport à proximité</span></div>';
+
+  /* DIR Est — autoroutes et nationales */
+  if (axesMajeurs.autoroutes.length > 0 || axesMajeurs.nationales.length > 0) {
+    var axes = axesMajeurs.autoroutes.concat(axesMajeurs.nationales).map(function(a){return a.nom.split(' ')[0];}).join(', ');
+    html +=
+      '<div class="contact-card">' +
+        '<div class="contact-nom">DIR Est — Voies rapides</div>' +
+        '<div class="contact-role">Gestionnaire autoroutes et routes nationales (' + axes + '). Toute création d\'accès ou projet à < 500 m nécessite son accord.</div>' +
+        '<div class="contact-coords">' +
+          '<span>📞 03 88 13 60 00</span>' +
+          '<span>🌐 <a href="https://www.dir.est.developpement-durable.gouv.fr" target="_blank">dir.est.developpement-durable.gouv.fr</a></span>' +
+        '</div>' +
+        '<div class="contact-priorite obligatoire">Consultation obligatoire</div>' +
+      '</div>';
+  }
+
+  /* SNCF Réseau — ferroviaire */
+  if (axesMajeurs.ferroviaire.length > 0) {
+    var lignes = axesMajeurs.ferroviaire.map(function(a){return a.nom.split(' ')[0];}).join(', ');
+    html +=
+      '<div class="contact-card">' +
+        '<div class="contact-nom">SNCF Réseau — Proximité voies ferrées</div>' +
+        '<div class="contact-role">Gestionnaire infrastructure ferroviaire (' + lignes + '). Accord requis pour tout projet dans la bande de sécurité (servitude I1).</div>' +
+        '<div class="contact-coords">' +
+          '<span>📞 3635</span>' +
+          '<span>🌐 <a href="https://www.sncf-reseau.com" target="_blank">sncf-reseau.com</a></span>' +
+        '</div>' +
+        '<div class="contact-priorite recommande">Recommandé si < 100 m</div>' +
+      '</div>';
+  }
+
+  /* DDT 90 Mobilités */
+  html +=
+    '<div class="contact-card">' +
+      '<div class="contact-nom">DDT 90 — Pôle Mobilités</div>' +
+      '<div class="contact-role">Instruction des dossiers d\'accès sur voies nationales, coordination avec DIR Est, avis sur les projets générateurs de trafic dans le 90.</div>' +
+      '<div class="contact-coords">' +
+        '<span>📞 03 84 58 86 00</span>' +
+        '<span>✉ ddt-90@territoire-de-belfort.gouv.fr</span>' +
+      '</div>' +
+      '<div class="contact-priorite recommande">Recommandé</div>' +
+    '</div>';
+
+  /* ATMO BFC — qualité de l'air */
+  if (axesMajeurs.autoroutes.length > 0 || axesMajeurs.nationales.length > 0) {
+    html +=
+      '<div class="contact-card">' +
+        '<div class="contact-nom">ATMO BFC — Qualité de l\'air</div>' +
+        '<div class="contact-role">Carte stratégique de l\'air, mesures NO2/PM aux abords des axes routiers à fort trafic. Données essentielles pour les études d\'impact air.</div>' +
+        '<div class="contact-coords">' +
+          '<span>🌐 <a href="https://www.atmo-bfc.org" target="_blank">atmo-bfc.org</a></span>' +
+        '</div>' +
+        '<div class="contact-priorite optionnel">Optionnel</div>' +
+      '</div>';
+  }
+
+  html += '</div>';
+
+  /* Insérer AVANT les autres groupes de contacts */
+  ctx.insertAdjacentHTML('afterbegin', html);
+}
+
+/* ── 4. CHECKLIST ─────────────────────────────────────────────────────────── */
+function injecterChecklistAxesMajeurs(axesMajeurs, typeProjet) {
+  if (!axesMajeurs || !axesMajeurs.aProximite) return;
+  var body = document.getElementById('checklist-body');
+  if (!body) return;
+
+  var items = [];
+
+  /* Étude acoustique — autoroute ou nationale */
+  if (axesMajeurs.autoroutes.length > 0 || axesMajeurs.nationales.length > 0) {
+    items.push({
+      ico: '🔊', label: 'Étude acoustique préalable au PC',
+      desc: 'Obligatoire pour tout logement ou ERP à proximité d\'un axe classé. Réalisée par un bureau d\'études agréé. Atteste le respect des objectifs d\'isolation (DnT,A). Doit être jointe au dossier PC.',
+      delai: 'Avant dépôt PC', oblig: true,
+    });
+    items.push({
+      ico: '📋', label: 'Attestation acoustique (Cerfa)',
+      desc: 'Document attestant la prise en compte du classement sonore dans la conception du projet. Obligatoire pour les logements neufs (décret 2011-604). Signée par le maître d\'œuvre.',
+      delai: 'Joint au PC', oblig: true,
+    });
+  }
+
+  /* Consultation DIR Est — autoroute */
+  if (axesMajeurs.autoroutes.length > 0) {
+    items.push({
+      ico: '🛣', label: 'Consultation DIR Est',
+      desc: 'Obligatoire pour tout accès nouveau sur autoroute ou projet à moins de 500 m. La DIR Est vérifie la compatibilité avec les règles d\'accessibilité et de sécurité autoroutière.',
+      delai: 'Avant PC', oblig: true,
+    });
+    items.push({
+      ico: '🌬', label: 'Étude impact qualité de l\'air',
+      desc: 'Recommandée pour les logements à moins de 300 m d\'une autoroute. Utilise les données ATMO BFC (carte stratégique air). Justifie le choix d\'une VMC double flux avec filtration.',
+      delai: 'Phase APS', oblig: false,
+    });
+  }
+
+  /* Consultation SNCF Réseau — ferroviaire */
+  if (axesMajeurs.ferroviaire.length > 0) {
+    items.push({
+      ico: '🚆', label: 'Vérification servitude ferroviaire I1',
+      desc: 'La servitude I1 interdit ou limite les constructions à proximité des voies SNCF. Vérifier au PLU (annexe servitudes) et consulter SNCF Réseau si projet dans la bande de sécurité.',
+      delai: 'Avant PC', oblig: true,
+    });
+  }
+
+  /* VMC double flux — si axe fort */
+  if (axesMajeurs.autoroutes.length > 0) {
+    items.push({
+      ico: '🔄', label: 'VMC double flux avec filtration',
+      desc: 'Recommandée pour tout logement ou ERP à moins de 300 m d\'une autoroute. Filtre les particules fines (PM2.5) et le NO2. Justifier dans la notice descriptive du PC.',
+      delai: 'Phase DCE', oblig: false,
+    });
+  }
+
+  if (items.length === 0) return;
+
+  var section = document.createElement('div');
+  section.className = 'chk-section';
+  section.innerHTML =
+    '<div class="chk-section-titre">🛣 Axes de transport à proximité</div>' +
+    items.map(function(it) {
+      return '<div class="chk-item' + (it.oblig ? ' chk-obligatoire' : '') + '">' +
+        '<span class="chk-ico">' + it.ico + '</span>' +
+        '<div class="chk-content">' +
+          '<div class="chk-label">' + it.label + (it.oblig ? ' <span class="chk-badge-oblig">Obligatoire</span>' : '') + '</div>' +
+          '<div class="chk-desc">' + it.desc + '</div>' +
+          '<div class="chk-delai">⏱ ' + it.delai + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+  /* Insérer en tête de checklist */
+  body.insertBefore(section, body.firstChild);
+}
+
+/* ── 5. MODIFICATEURS SIMULATION ─────────────────────────────────────────── */
+function modificateursSimulationAxesMajeurs(axesMajeurs) {
+  var mod = { dureeDelta: 0, complexDelta: 0, impactDelta: 0, alertes: [] };
+  if (!axesMajeurs || !axesMajeurs.aProximite) return mod;
+
+  if (axesMajeurs.autoroutes.length > 0) {
+    mod.dureeDelta   += 2;   /* +2 mois : étude acoustique + consultation DIR */
+    mod.complexDelta += 10;  /* complexité accrue : accès, bruit, air */
+    mod.impactDelta  += 8;   /* impact environnemental : pollution, bruit */
+    mod.alertes.push('Autoroute à proximité : étude acoustique et consultation DIR Est obligatoires (+2 mois)');
+  }
+  if (axesMajeurs.nationales.length > 0) {
+    mod.dureeDelta   += 1;
+    mod.complexDelta += 5;
+    mod.impactDelta  += 4;
+    mod.alertes.push('Route nationale à proximité : attestation acoustique requise (+1 mois)');
+  }
+  if (axesMajeurs.ferroviaire.length > 0) {
+    mod.dureeDelta   += 1;
+    mod.complexDelta += 6;
+    mod.impactDelta  += 5;
+    mod.alertes.push('Axe ferroviaire à proximité : vérification servitude I1 SNCF (+1 mois)');
+  }
+  return mod;
+}
+
+
 lancerAnalyse = function() {
 
   /* ── Vérifications préalables ── */
@@ -4234,13 +3644,7 @@ lancerAnalyse = function() {
   var msgR = document.getElementById('placement-requis');
   if (msgR) msgR.classList.remove('on');
 
-  /* ══════════════════════════════════════════════════════════════
-     ÉTAPE 1 — Détection géographique des zones sensibles
-     Parcourt toutes les features de COUCHES_DATA et teste si le
-     projet est dans/à proximité de chaque feature.
-     Retourne un Set des type-IDs de zones actives.
-     ex : { "ppri", "radon", "znieff2", "perimetre_MH" }
-     ══════════════════════════════════════════════════════════════ */
+  /* ÉTAPE 1 — Détection géographique des zones sensibles */
   var zonesResultats = detecterZones(A.position.lat, A.position.lng, A.typeProjet);
 
   /* Set des types de zones géographiques détectées pour le projet */
@@ -4249,12 +3653,18 @@ lancerAnalyse = function() {
     res.zones.forEach(function(z) { zonesActives.add(z.type); });
   });
 
-  /* ══════════════════════════════════════════════════════════════
-     ÉTAPE 2 — Filtrage des enjeux de base
-     Les enjeux sans "zones_requises" (null) sont toujours affichés.
-     Les enjeux avec "zones_requises" ne sont affichés QUE si au
-     moins une des zones requises est présente dans zonesActives.
-     ══════════════════════════════════════════════════════════════ */
+  /* ÉTAPE 1b — Détection des zones agricoles (si projet agriculture) */
+  /* Détection zones agricoles pour TOUS les types de projets :
+     une ZAE, un logement ou une friche en zone nitrates/région agricole
+     a des enjeux spécifiques (CDPENAF, plan de fumure, AOP...). */
+  A._zonesAgri = null;
+  if (A.position) {
+    A._zonesAgri = detecterZonesAgricoles(A.position.lat, A.position.lng);
+    A._zonesAgri.forEach(function(z) { zonesActives.add(z.type); });
+  }
+
+  A._axesMajeurs=detecterAxesMajeurs(A.position.lat,A.position.lng);
+  /* ÉTAPE 2 — Filtrage des enjeux de base */
   var tous = ENJEUX[A.typeProjet] || [];
   var filtres = tous.filter(function(e) {
     /* Filtre envergure */
@@ -4265,11 +3675,7 @@ lancerAnalyse = function() {
     return e.zones_requises.some(function(z) { return zonesActives.has(z); });
   });
 
-  /* ══════════════════════════════════════════════════════════════
-     ÉTAPE 3 — Enjeux contextuels (ENJEUX_ZONES)
-     Ajoute les enjeux spécifiques aux zones détectées
-     (PPRi, Natura 2000, MH, radon...) si pas déjà présents.
-     ══════════════════════════════════════════════════════════════ */
+  /* ÉTAPE 3 — Enjeux contextuels (ENJEUX_ZONES) */
   zonesResultats.forEach(function(res) {
     var ez = res.enjeu;
     if (ez.tmin > A.taille) return;
@@ -4277,6 +3683,16 @@ lancerAnalyse = function() {
     if (!dejaPresent) filtres.push(ez);
   });
 
+  /* ── Enjeux agricoles contextuels (zones nitrates, humides, région agri) ── */
+  if (A._zonesAgri && A._zonesAgri.length > 0) {
+    var enjeuxAgri = genererEnjeuxAgricoles(A._zonesAgri, A.taille, A.typeProjet);
+    enjeuxAgri.forEach(function(e) {
+      var dejaPresent = filtres.some(function(f) { return f.id === e.id; });
+      if (!dejaPresent) filtres.push(e);
+    });
+  }
+
+  if(A._axesMajeurs&&A._axesMajeurs.aProximite){var eA=genererEnjeuxAxesMajeurs(A._axesMajeurs,A.taille,A.typeProjet);eA.forEach(function(e){if(!filtres.some(function(f){return f.id===e.id;}))filtres.push(e);});}
   /* ── Tri : enjeux contextuels en tête, puis par niveau ── */
   var ord = { eleve: 0, moyen: 1, faible: 2 };
   filtres.sort(function(a, b) {
@@ -4326,24 +3742,45 @@ lancerAnalyse = function() {
   afficherContacts();
   afficherChecklist();
   afficherAlentours();
+  if(A._axesMajeurs&&A._axesMajeurs.aProximite){injecterContactsAxesMajeurs(A._axesMajeurs);injecterChecklistAxesMajeurs(A._axesMajeurs,A.typeProjet);}
+  /* Stocker les données pour le rapport (bouton header) */
+  A._lastFiltres        = filtres;
+  A._lastZonesResultats = zonesResultats;
+  var btnRap = document.getElementById('btn-rapport');
+  if (btnRap) { btnRap.disabled = false; btnRap.style.opacity = '1'; }
+
+  /* ── Interrogation RPG IGN (asynchrone) ─────────────────────────────
+     Requête WFS Géoplateforme : détecte si le projet est posé sur
+     une parcelle agricole déclarée PAC (LANDUSE.AGRICULTURE2024).
+     Injecte un bandeau, des contacts et des étapes checklist dédiés
+     APRÈS le rendu synchrone de l'analyse, sans bloquer l'UI.          */
+  A._rpgParcelle = null;
+  var _rpgLat = A.position.lat, _rpgLng = A.position.lng;
+  var rpgSpin = document.getElementById('rpg-spinner');
+  if (rpgSpin) rpgSpin.style.display = 'inline-block';
+
+  interrogerRPG(_rpgLat, _rpgLng)
+    .then(function(props) {
+      if (rpgSpin) rpgSpin.style.display = 'none';
+      /* Ignorer si le projet a été déplacé entre-temps */
+      if (A.position && A.position.lat === _rpgLat && A.position.lng === _rpgLng) {
+        appliquerRPG(props);
+      }
+    })
+    .catch(function() {
+      if (rpgSpin) rpgSpin.style.display = 'none';
+    });
 };
 
-/* ════════════════════════════════════════════════════════════════════
-   DÉTECTION DE ZONES — moteur de géodétection
-   Détermine quels enjeux conditionnels s'appliquent selon la position
-   du projet par rapport aux features de COUCHES_DATA.
-   ════════════════════════════════════════════════════════════════════ */
+/* ── DÉTECTION DE ZONES — moteur géodétection (ENJEUX_ZONES × COUCHES_DATA)
+   detecterZones() → zonesResultats[] → injectés dans lancerAnalyse()    */
 
 /* Base de données des enjeux conditionnels par zone
    Chargée depuis enjeux-zones.json puis embarquée ici */
 /* ENJEUX_ZONES embarqués (compatibilité file:// et HTTP)
    Source canonique : enjeux-zones.json */
-var ENJEUX_ZONES = [{"id":"zone-ppri-inondation","zone_types":["ppri","azi"],"zone_layers":["risques"],"zone_distance":0,"types_projets":["logement","zae","equipement","energie","transport","agriculture","nature","friche"],"nom":"Zone inondable — PPRi/AZI détecté","ico":"🌊","niv":"eleve","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est localisé dans ou à proximité d'une zone inondable identifiée dans le PPRi (Plan de Prévention du Risque inondation) ou l'AZI (Atlas des Zones Inondables)","85 des 101 communes du Territoire de Belfort sont soumises au risque inondation","La Savoureuse, la Bourbeuse et l'Allaine sont les trois cours d'eau couverts par des PPRi opposables","Le nœud hydrographique vosgien réagit très rapidement lors des fontes de neige"],"consequences":["Interdiction absolue de construire en zone rouge PPRi (risque fort)","Prescriptions constructives obligatoires en zone bleue PPRi (plancher surélevé, matériaux résistants)","Etude hydraulique requise pour tout projet modifiant l'écoulement des eaux","Risque de dommages matériels majeurs si construction non conforme"]},"economique":{"facteurs":["Coût des études hydrauliques supplémentaires (5 000 à 20 000 €)","Surprime d'assurance habitation/multirisque en zone inondable","Dépréciation de la valeur vénale du bien situé en zone bleue ou rouge","Coût des mesures constructives (plancher surélevé, soupiraux, matériaux)"],"consequences":["Renchérissement de 8 à 25 % du coût de construction en zone bleue","Impossibilité d'obtenir un financement bancaire en zone rouge PPRi","Obligation d'information préventive de l'acquéreur (IAL — loi ALUR)","Indemnisation limitée en cas de sinistre si non-respect des prescriptions PPRi"]},"politique":{"facteurs":["PPRi Savoureuse, PPRi Bourbeuse, PPRi Allaine : 3 documents opposables dans le 90","Servitude d'utilité publique annexée au PLU : contrainte réglementaire directe","Instruction de la DDT 90 : consultation systématique du PPRi avant tout accord de principe","AZI Bourbeuse et AZI Douce : cartographies de référence pour les zones non couvertes par PPRi"],"consequences":["Refus du permis de construire garanti en zone rouge PPRi sans dérogation exceptionnelle","Délai d'instruction majoré de 1 à 3 mois pour l'analyse du risque inondation","Responsabilité pénale du maire en cas d'autorisation accordée à tort","Obligation de mentionner le risque dans tout acte de vente ou bail"]},"social":{"facteurs":["Sécurité des futurs occupants face aux crues soudaines et de plaine","Mémoire collective des inondations historiques dans le 90 (1999, 2007, 2021)","Vulnérabilité accrue des populations âgées et PMR en cas d'évacuation d'urgence","Importance du Plan Communal de Sauvegarde (PCS) dans les communes concernées"],"consequences":["Risque vital pour les occupants en cas de crue rapide (crues éclairs vosgiens)","Perturbation prolongée de l'activité économique après sinistre (relogement, réparations)","Traumatismes psychologiques liés aux inondations récurrentes","Coût social estimé à plusieurs millions d'euros par événement majeur"]}},"actions":["Consulter immédiatement la carte PPRi en mairie (gratuit, obligatoire avant tout dépôt de PC)","Vérifier la couleur de la zone : rouge = refus, bleue = prescriptions, blanche = pas de contrainte PPRi","Commander une étude hydraulique si le projet modifie l'écoulement des eaux","Contacter la DDT 90 (service risques) pour un avis préalable informel","Prévoir le plancher habitable à 50 cm minimum au-dessus de la cote de référence de crue"],"refs":[{"n":"C57","t":"Risque inondation"},{"n":"C58","t":"PPRi Savoureuse/Bourbeuse/Allaine"}]},{"id":"zone-sismique-3","zone_types":["sismique_3"],"zone_layers":["risques"],"zone_distance":0,"types_projets":["logement","equipement","zae"],"nom":"Zone de sismicité 3 — Vosges du Sud","ico":"🪨","niv":"moyen","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est localisé en zone de sismicité modérée (niveau 3) dans le massif vosgien","Risque de secousses pouvant atteindre l'intensité VII sur l'échelle MSK","Interaction possible avec les aléas de mouvements de terrain en zone pentue","Historique sismique : séismes ressentis à Bâle (1356) encore perceptibles dans la zone"],"consequences":["Dommages structurels possibles sur les bâtiments non parasismiques","Amplification du risque en cas de sols meubles ou de versants instables","Risque de liquéfaction des sols saturés en eau lors d'un séisme","Cumul possible avec le risque de mouvement de terrain vosgien"]},"economique":{"facteurs":["Surcoût parasismique pour les structures (béton armé, bois, acier) : +5 à +15%","Etudes géotechniques de site recommandées pour les ERP et IGH","Assurance dommages-ouvrage majorée en zone sismique 3","Coût de mise en conformité des bâtiments existants non parasismiques"],"consequences":["Budget construction majoré de 5 à 15% pour respecter l'Eurocode 8","Délai de conception allongé pour l'ingénierie parasismique","Potentielle dépréciation des biens non mis aux normes parasismiques","Frais d'expertise post-séisme à prévoir dans le budget de gestion"]},"politique":{"facteurs":["Décret du 22 octobre 2010 : zonage sismique réglementaire en vigueur","Eurocode 8 (EN 1998) : norme de construction parasismique obligatoire en zone 3","Arrêté du 22 octobre 2010 : règles de construction parasismique applicables","ERP et IGH : règles renforcées indépendamment de la zone"],"consequences":["Non-conformité parasismique = mise en demeure et refus de certificat de conformité","Responsabilité du maître d'ouvrage engagée en cas de sinistre si normes non respectées","Déclaration obligatoire de la zone sismique dans les actes notariaux","Contrôle technique obligatoire pour les ERP de catégories 1 à 4 en zone 3"]},"social":{"facteurs":["Culture du risque sismique limitée dans le Territoire de Belfort (moins visible que l'inondation)","Population peu sensibilisée aux gestes de protection en cas de séisme","Bâtiments anciens (centre-ville de Belfort, villages vosgiens) potentiellement vulnérables","Plan ORSEC SEISME : réponse départementale organisée mais peu testée"],"consequences":["Risque de panique et d'évacuation désorganisée sans information préventive","Dommages plus importants sur le patrimoine bâti ancien non renforcé","Nécessité de sensibilisation du grand public aux comportements à adopter","Impact potentiellement fort sur les établissements recevant du public"]}},"actions":["Appliquer l'Eurocode 8 dans la conception structurelle (maître d'œuvre spécialisé)","Réaliser une étude géotechnique de site pour caractériser le sol (catégorie A à E)","Prévoir un contrôle technique sismique pour les ERP et les bâtiments > 28m","Consulter le BRGM pour la cartographie détaillée du risque sismique local"],"refs":[{"n":"C59","t":"Risque sismique"}]},{"id":"zone-mvt-terrain","zone_types":["mvt_terrain"],"zone_layers":["risques"],"zone_distance":0,"types_projets":["logement","zae","equipement","energie","transport","nature"],"nom":"Aléa mouvement de terrain — versants vosgiens","ico":"⛰","niv":"eleve","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est localisé dans une zone d'aléa mouvements de terrain des versants vosgiens","Glissements, éboulements, coulées de boue recensés dans le massif vosgien","Terrain soumis à l'érosion et à l'instabilité lors des épisodes pluvieux intenses","Présence de versants à forte pente (> 10 %) et de formations géologiques instables"],"consequences":["Risque de glissement de terrain lors d'épisodes de pluies prolongées","Déstabilisation possible des fondations si terrain non diagnostiqué","Risque d'endommagement irréversible de l'infrastructure en cas d'événement","Aggravation potentielle par le changement climatique (épisodes pluvieux plus intenses)"]},"economique":{"facteurs":["Etude géotechnique G1 (reconnaissance préliminaire) obligatoire : 800 à 2 000 €","Etude G2 (avant-projet) nécessaire si risque identifié : 3 000 à 8 000 €","Coût des fondations renforcées (pieux, micropieux) si sols instables : +20 à +50%","Systèmes de drainage et de confortement des talus : 5 000 à 50 000 €"],"consequences":["Renchérissement significatif du coût de construction sur terrains pentus","Responsabilité décennale du constructeur engagée en cas de sinistre géotechnique","Indemnisation complexe par l'assurance si prévention insuffisante","Coût de reconstruction ou de consolidation après sinistre souvent supérieur au coût initial"]},"politique":{"facteurs":["Cartographie BRGM des mouvements de terrain : référence réglementaire nationale","PPR mouvements de terrain : peut être prescrit par le préfet en zone à risque","Loi ELAN 2018 : étude géotechnique G1+G2 obligatoire pour les maisons individuelles en zone exposée","Arrêté préfectoral de catastrophe naturelle applicable après un sinistre avéré"],"consequences":["Instruction du permis avec consultation de la carte des mouvements de terrain","Possible refus ou prescription d'étude approfondie si zone rouge identifiée","Responsabilité du maire engagée si autorisation accordée en zone à risque avérée","Obligation de mention dans les actes de vente (IAL — loi ALUR)"]},"social":{"facteurs":["Sécurité des personnes exposées au risque de glissement soudain","Présence possible d'habitations existantes sur des versants instables dans les villages vosgiens","Risque d'interruption des voies d'accès (routes, chemins) par coulée ou éboulement","Patrimoine naturel et paysager des versants vosgiens à préserver"],"consequences":["Risque vital pour les occupants d'un bâtiment en cas de glissement rapide","Coupure des accès et isolement des hameaux lors d'épisodes extrêmes","Perturbation du quotidien des habitants si travaux de confortement nécessaires","Anxiété et sentiment d'insécurité pour les riverains des zones instables"]}},"actions":["Consulter la carte BRGM des mouvements de terrain pour la parcelle exacte","Commander une étude géotechnique G1 dès la phase de faisabilité","Eviter les travaux de déblai/remblai qui déstabilisent les versants","Contacter la DDT 90 pour vérifier l'existence d'un PPR mouvements de terrain","Prévoir un système de drainage périphérique des eaux pluviales"],"refs":[{"n":"C60","t":"Mouvements de terrain"},{"n":"C61","t":"Retrait-gonflement argiles"}]},{"id":"zone-radon","zone_types":["radon"],"zone_layers":["risques"],"zone_distance":0,"types_projets":["logement","equipement","zae"],"nom":"Zone à potentiel radon élevé","ico":"☢","niv":"moyen","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est localisé dans une zone géologique à fort potentiel radon (granite vosgien)","Le radon est un gaz radioactif naturel issu de la désintégration de l'uranium et du radium","Concentrations en radon plus élevées dans les zones de sous-sol granitique fracturé","Le radon s'accumule dans les espaces clos (sous-sols, espaces de vie au rez-de-chaussée)"],"consequences":["Exposition chronique au radon : 2e cause de cancer du poumon en France après le tabac","Concentration en radon variable selon la perméabilité du sol et la ventilation du bâtiment","Nécessité d'une ventilation mécanique contrôlée (VMC) pour limiter l'accumulation","Risque sanitaire à long terme si aucune mesure préventive n'est prise"]},"economique":{"facteurs":["Coût des mesures préventives en construction neuve : 500 à 2 000 € (membrane, VMC)","Coût d'un diagnostic radon en bâtiment existant : 150 à 300 € (3 mois de mesure)","Coût de remédiation si niveau > 300 Bq/m³ : 2 000 à 10 000 € selon les travaux","Obligation de travaux dans les ERP si concentration > 300 Bq/m³ (délai 3 ans)"],"consequences":["Investissement préventif rentable car curatif beaucoup plus coûteux","Dépense de santé publique évitée si prévention intégrée dès la conception","Possible dépréciation immobilière si diagnostics radon défavorables rendus publics","Coût de suivi annuel recommandé en zone à potentiel radon élevé"]},"politique":{"facteurs":["Arrêté du 27 juin 2018 : niveau de référence à 300 Bq/m³ dans les bâtiments","ERP catégories 1 à 4 : mesures obligatoires si niveau > 300 Bq/m³","Loi de modernisation du système de santé 2016 : intégration du radon dans les diagnostics","Plan National Radon 2020–2024 : réduction de l'exposition de la population"],"consequences":["Obligation de diagnostic radon dans les ERP en zone à potentiel élevé","Travaux de remédiation obligatoires dans les ERP si dépassement du seuil","Mention du risque radon dans les diagnostics immobiliers des zones concernées","Responsabilité du maître d'ouvrage en cas de sinistre sanitaire post-construction"]},"social":{"facteurs":["Faible connaissance du risque radon dans la population générale","Présence plus forte dans les bâtiments anciens peu ventilés (maisons en pierre)","Cumul possible avec le tabagisme : risque multiplié par 5 pour les fumeurs exposés au radon","Besoin d'information et de sensibilisation des élus, des particuliers et des professionnels"],"consequences":["Augmentation du risque de cancer du poumon pour les occupants non informés","Sentiment d'injustice des habitants si le risque est découvert tardivement","Nécessité de campagnes de sensibilisation et de dépistage dans les zones concernées","Impact psychologique des diagnostics positifs sur les propriétaires"]}},"actions":["Intégrer une membrane anti-radon sous la dalle dès la conception (coût minimal en neuf)","Prévoir une VMC double flux dans tout bâtiment résidentiel ou ERP en zone radon","Commander un diagnostic radon en rénovation avant travaux (3 mois de mesure minimum)","Consulter la cartographie radon IRSN pour la commune exacte du projet"],"refs":[{"n":"C64","t":"Risque Radon"}]},{"id":"zone-humide","zone_types":["zone_humide"],"zone_layers":["eau"],"zone_distance":50,"types_projets":["logement","zae","equipement","energie","transport","agriculture","nature","friche"],"nom":"Zone humide probable détectée","ico":"🦆","niv":"eleve","tmin":1,"axes":{"environnement":{"facteurs":["Une zone humide probable est identifiée à moins de 50m du projet (cartographie DDT 90, Atlas C46)","Les zones humides remplissent des fonctions écosystémiques essentielles : régulation des crues, épuration de l'eau, biodiversité","Le Territoire de Belfort présente de nombreuses zones humides dans les fonds de vallée de la Savoureuse et de la Bourbeuse","50% des zones humides françaises ont disparu depuis 1960 — patrimoine naturel irremplaçable"],"consequences":["Toute destruction de zone humide est soumise à autorisation et compensation obligatoire (200% minimum)","Impact irréversible sur la biodiversité aquatique et semi-aquatique","Réduction de la capacité d'autoépuration naturelle des cours d'eau en aval","Aggravation des crues si zone humide détruite (perte du rôle tampon)"]},"economique":{"facteurs":["Délimitation précise de la zone humide par sondages pédologiques : 3 000 à 8 000 €","Coût des mesures compensatoires si destruction inévitable : 5 000 à 50 000 €/ha","Dossier loi sur l'eau IOTA : coût de constitution (bureau d'études) 5 000 à 30 000 €","Coût de reconception du projet pour éviter la zone humide (variante de tracé ou d'implantation)"],"consequences":["Surcoût significatif si zone humide impactée et mesures compensatoires requises","Allongement des délais de 6 à 12 mois pour l'instruction du dossier loi sur l'eau","Financement possible par l'Agence de l'eau RMC pour les projets de restauration","Blocage du projet par contentieux NGO si zone humide détruite sans autorisation"]},"politique":{"facteurs":["Article L.214-1 du Code de l'environnement : régime IOTA (déclaration >0,1 ha, autorisation >1 ha)","SAGE Allan : le schéma d'aménagement et de gestion des eaux fixe des objectifs de préservation","Arrêté du 24 juin 2008 : définition et critères de délimitation des zones humides","DCE (Directive Cadre sur l'Eau) : objectif bon état écologique des masses d'eau d'ici 2027"],"consequences":["Instruction par la DDT 90 (police de l'eau) avec consultation de l'Agence de l'eau","Enquête publique obligatoire pour les dossiers IOTA en régime d'autorisation","Arrêté de mise en demeure si travaux engagés sans dossier loi sur l'eau","Sanction pénale possible (jusqu'à 2 ans d'emprisonnement et 150 000 € d'amende)"]},"social":{"facteurs":["Services rendus par la zone humide aux habitants : régulation des crues, eau potable, biodiversité","Activités récréatives (pêche, randonnée, observation naturaliste) liées aux zones humides","Patrimoine paysager et identité territoriale des fonds de vallée vosgiens et sundgauviens","Sensibilité des associations environnementales locales à la préservation des zones humides"],"consequences":["Opposition locale forte si zone humide impactée sans concertation","Perte de services écosystémiques gratuits pour les habitants (valeur estimée à plusieurs k€/ha/an)","Recours associations possibles jusqu'au tribunal administratif","Impact sur la qualité de l'eau potable si zone humide détruite en amont d'un captage"]}},"actions":["Faire délimiter la zone humide par un bureau d'études agréé avant tout dépôt de permis","Appliquer la séquence Eviter-Réduire-Compenser (ERC) : prioriser l'évitement","Déposer un dossier loi sur l'eau IOTA à la DDT 90 si impact inévitable > 0,1 ha","Contacter l'Agence de l'eau RMC pour un financement si le projet vise la restauration","Consulter l'Atlas des zones humides probables DDT 90 (C46) avant toute décision"],"refs":[{"n":"C46","t":"Zones humides probables"},{"n":"C43","t":"SAGE Allan"}]},{"id":"zone-cours-eau","zone_types":["cours_eau","corridor_bleu"],"zone_layers":["eau","biodiversite"],"zone_distance":100,"types_projets":["logement","zae","equipement","energie","transport","agriculture","friche"],"nom":"Cours d'eau à moins de 100m — Continuité écologique","ico":"🏞","niv":"moyen","tmin":1,"axes":{"environnement":{"facteurs":["Un cours d'eau est identifié à moins de 100m du projet (Savoureuse, Bourbeuse, Allaine, Lizaine ou affluent)","Continuité écologique longitudinale, transversale et verticale potentiellement impactée","Zone de ripisylve (bande boisée des berges) pouvant constituer un corridor TVB","Seulement 15% des masses d'eau en bon état écologique dans le Territoire de Belfort"],"consequences":["Obligation de bande tampon de 5m minimum non imperméabilisée le long du cours d'eau","Interdiction des rejets directs d'eaux pluviales non traitées dans le cours d'eau","Impact potentiel sur les frayères et les habitats aquatiques riverains","Risque de ruissellement de polluants (hydrocarbures, pesticides, métaux lourds) vers le cours d'eau"]},"economique":{"facteurs":["Dossier loi sur l'eau si travaux à moins de 10m d'un cours d'eau (rubrique 3.1.5.0)","Coût des bassins de rétention et de traitement des eaux de ruissellement","Servitude de 3m de berge non constructible le long de certains cours d'eau","Coût des mesures de protection pendant les travaux (batardeau, filtres à sédiments)"],"consequences":["Emprise constructible réduite par les servitudes de berge","Majoration du coût de gestion des eaux pluviales (traitement avant rejet)","Délai d'instruction majoré si dossier loi sur l'eau requis","Risque de contentieux si pollution du cours d'eau pendant les travaux"]},"politique":{"facteurs":["Code de l'environnement art. L.215-14 : bande de 3m non constructible sur les berges","Rubrique 3.1.5.0 IOTA : déclaration si travaux à moins de 10m d'un cours d'eau","Plan de gestion de la Savoureuse, de la Bourbeuse et de l'Allaine","DCE : interdiction de dégradation de l'état des masses d'eau"],"consequences":["Servitude de 3m de berge opposable au permis de construire","Police de l'eau (DDT 90) compétente pour contrôler les travaux riverains","Arrêté de mise en demeure et astreinte si servitude non respectée","Possibilité de prescriptions spéciales dans le permis (protection des berges)"]},"social":{"facteurs":["Accès au cours d'eau pour les habitants (sentiers de randonnée, pêche)","Valeur paysagère et récréative des berges pour les communes riveraines","Identité des centres-bourgs historiquement liés aux cours d'eau vosgiens","Risque de pollution visible et médiatique en cas d'incident pendant les travaux"],"consequences":["Opposition des pêcheurs et des associations de protection des cours d'eau","Valorisation du projet si les berges sont préservées voire restaurées","Contribution à l'aménagement durable si la ripisylve est maintenue","Impact sur le tourisme vert lié aux cours d'eau si qualité dégradée"]}},"actions":["Maintenir une bande tampon de 5m minimum non imperméabilisée le long des berges","Installer des dispositifs anti-érosion et de filtration des eaux de chantier","Vérifier si un dossier loi sur l'eau IOTA est requis (rubrique 3.1.5.0)","Contacter le syndicat de rivière compétent pour les travaux sur berges","Préserver ou restaurer la ripisylve (bande boisée des berges)"],"refs":[{"n":"C41","t":"Cartographie cours d'eau"},{"n":"C42","t":"Continuité écologique"}]},{"id":"zone-natura2000","zone_types":["natura2000","reserve","reservoir"],"zone_layers":["biodiversite"],"zone_distance":0,"types_projets":["logement","zae","equipement","energie","transport","agriculture","nature","friche"],"nom":"Zone Natura 2000 / Réservoir de biodiversité TVB","ico":"🦋","niv":"eleve","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est localisé dans ou à proximité d'un site Natura 2000 ou d'un réservoir de biodiversité TVB","Ces espaces abritent des habitats naturels et des espèces d'intérêt européen à fort enjeu de conservation","La ZNIEFF et les réservoirs TVB constituent le réseau écologique de référence du massif vosgien","Natura 2000 couvre plusieurs milliers d'hectares dans la partie nord du Territoire de Belfort"],"consequences":["Evaluation d'incidences Natura 2000 obligatoire si impact possible sur le site","Séquence ERC impérative avec mesures de compensation si impact résiduel significatif","Dérogation CNPN (Conseil National de Protection de la Nature) si espèces protégées impactées","Risque de fragmentation de la TVB et d'isolement des populations animales"]},"economique":{"facteurs":["Coût de l'évaluation d'incidences Natura 2000 : 5 000 à 30 000 €","Coût des inventaires biologiques spécifiques (chiroptères, rapaces, flore) : 15 000 à 60 000 €","Coût des mesures compensatoires ERC si impact résiduel : 10 000 à 200 000 €","Risque financier majeur si projet annulé en contentieux après investissement initial"],"consequences":["Budget études environnementales pouvant représenter 5 à 15% du coût total","Allongement des délais de 12 à 36 mois pour les projets en zone Natura 2000","Risque d'abandon du projet si compensation impossible ou trop coûteuse","Valorisation économique de la biodiversité préservée (tourisme, services écosystémiques)"]},"politique":{"facteurs":["Directive Habitats (92/43/CEE) et Directive Oiseaux (79/409/CEE) : fondements juridiques","Article L.414-4 du Code de l'environnement : obligation d'évaluation d'incidences","SRCE BFC : prescriptions de maintien de la TVB dans les documents d'urbanisme","DREAL BFC : autorité compétente pour valider l'évaluation d'incidences"],"consequences":["Avis défavorable de la DREAL et de la Commission Européenne si impacts non évalués","Procédure d'infraction européenne possible si habitat prioritaire détruit","Recours en annulation du permis si évaluation d'incidences insuffisante","Arrêté de protection de biotope possible en complément de Natura 2000"]},"social":{"facteurs":["Valeur patrimoniale du massif vosgien et de sa biodiversité pour les habitants","Tourisme naturel et randonnée : activités économiques dépendant de la biodiversité","Sensibilité forte des associations naturalistes et environnementales locales","Opération Grand Site Ballon d'Alsace : démarche de valorisation en cours"],"consequences":["Opposition forte des associations si impact non compensé ou insuffisamment atténué","Médiatisation possible du conflit entre projet et protection de la nature","Contribution positive à l'attractivité si projet respecte et valorise la biodiversité","Label 'Grand Site de France' valorisable si projet exemplaire"]}},"actions":["Réaliser une évaluation préliminaire d'incidences Natura 2000 en phase de faisabilité","Commander des inventaires naturalistes spécifiques sur une année complète minimum","Contacter la DREAL BFC pour un cadrage préalable de l'étude d'impact","Appliquer la séquence ERC dès la conception du projet (choix de variante d'implantation)","Consulter le DOCOB (Document d'Objectifs) du site Natura 2000 concerné"],"refs":[{"n":"C52","t":"Protection patrimoine naturel"},{"n":"C53","t":"Trame verte"},{"n":"C54","t":"Trame bleue"}]},{"id":"zone-znieff","zone_types":["znieff1","znieff2"],"zone_layers":["biodiversite"],"zone_distance":0,"types_projets":["logement","zae","equipement","energie","transport","agriculture","nature"],"nom":"ZNIEFF détectée — Zone Naturelle d'Intérêt Ecologique","ico":"🌿","niv":"moyen","tmin":1,"axes":{"environnement":{"facteurs":["Une ZNIEFF (Zone Naturelle d'Intérêt Ecologique Faunistique et Floristique) est identifiée sur ou à proximité du site","ZNIEFF de type I : zone de très grand intérêt biologique, habitat ou espèce remarquable","ZNIEFF de type II : grand ensemble naturel riche et peu modifié, offrant des potentialités biologiques importantes","Les ZNIEFF du massif vosgien incluent des tourbières, des forêts de hêtres-sapins et des pelouses d'altitude"],"consequences":["Inventaires naturalistes renforcés requis (flore, faune, habitats) sur au moins une saison","Espèces protégées potentiellement présentes : obligation de dérogation si impact","Intégration obligatoire dans l'étude d'impact si projet soumis à évaluation environnementale","Risque de découverte d'espèces protégées lors des travaux si inventaires insuffisants"]},"economique":{"facteurs":["Coût des inventaires naturalistes ZNIEFF : 5 000 à 25 000 € selon la taille et la saison","Coût d'une dérogation espèces protégées (CNPN) : 10 000 à 50 000 € de mesures compensatoires","Risque de découverte d'espèces protégées en cours de travaux (arrêt de chantier)","Valorisation possible : labellisation 'biodiversité' si projet exemplaire"],"consequences":["Budget environnemental à anticiper dès la phase de faisabilité","Arrêt de chantier coûteux si espèce protégée découverte non inventoriée","Subventions possibles pour les projets de préservation dans les ZNIEFF","Valorisation du projet et communication positive si biodiversité préservée"]},"politique":{"facteurs":["Les ZNIEFF sont des inventaires scientifiques sans portée réglementaire directe mais opposables en contentieux","Doctrine ERC nationale : évitement prioritaire dans les zones à forts enjeux écologiques","Préfet de région peut prescrire des études complémentaires si ZNIEFF impactée","DDT 90 : consultation systématique de la DREAL pour les projets en ZNIEFF"],"consequences":["Recours contentieux régulièrement couronnés de succès si ZNIEFF insuffisamment prise en compte","Avis réservé ou défavorable de la MRAe si étude d'impact ignore la ZNIEFF","Possibilité de prescription de mesures de suivi écologique post-travaux","Consultation publique : associations naturalistes attentives aux projets en ZNIEFF"]},"social":{"facteurs":["Valeur pédagogique et éducative des ZNIEFF pour les scolaires et le grand public","Attractivité touristique des zones naturelles remarquables inventoriées","Fierté locale pour les communes abritant des ZNIEFF (richesse patrimoniale)","Sensibilité croissante du grand public aux enjeux de biodiversité"],"consequences":["Opposition des naturalistes et des associations si ZNIEFF dégradée","Opportunité de sensibilisation si projet intègre une démarche pédagogique","Image négative du porteur de projet si destruction médiatisée","Bénéfice réputationnel si project prend en compte et valorise la ZNIEFF"]}},"actions":["Télécharger et analyser les données ZNIEFF sur l'INPN (inpn.mnhn.fr) pour la zone du projet","Réaliser des inventaires botaniques et faunistiques sur au moins une saison complète","Prévoir des variantes d'implantation qui évitent les habitats les plus sensibles","Contacter la DREAL BFC pour connaître les espèces patrimoniales spécifiques de la ZNIEFF"],"refs":[{"n":"C53","t":"ZNIEFF et inventaire naturel"},{"n":"C52","t":"Protection patrimoine naturel"}]},{"id":"zone-nitrates","zone_types":["nitrates"],"zone_layers":["agriculture"],"zone_distance":0,"types_projets":["agriculture","zae","logement"],"nom":"Zone vulnérable aux nitrates","ico":"🧪","niv":"moyen","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est localisé dans une zone vulnérable aux nitrates (bassin versant de l'Allan ou de la Bourbeuse)","Risque de pollution des eaux souterraines et superficielles par les nitrates d'origine agricole","Application du Programme d'Actions Nitrates (5e programme, arrêté préfectoral)","Enjeu de qualité de l'eau potable pour les captages AEP en aval"],"consequences":["Restrictions strictes sur les dates et doses d'épandage des engrais azotés","Obligation de couverture des sols en inter-culture pour limiter les fuites de nitrates","Risque de dépassement de la norme eau potable (50 mg/L) si pratiques non conformes","Eutrophisation des cours d'eau et des plans d'eau en cas de pollution diffuse"]},"economique":{"facteurs":["Coût des analyses de sol et de l'eau pour le suivi de la fertilisation","Investissement dans le stockage des effluents (minimum 6 mois en zone vulnérable)","Aides MAEC disponibles pour compenser les contraintes économiques (100 à 300 €/ha)","Pénalités PAC si non-respect de la conditionnalité renforcée (BCAE 1, 4, 5, 9)"],"consequences":["Coût de mise en conformité des stockages d'effluents parfois élevé (10 000 à 50 000 €)","Réduction possible de la marge si rendements limités par les restrictions d'azote","Valorisation économique possible via les certifications HVE ou AB en zone vulnérable","Sanctions PAC pouvant atteindre 5 à 10% de la totalité des aides reçues"]},"politique":{"facteurs":["Directive Nitrates européenne (91/676/CEE) : transposée dans le 5e Programme d'Actions","Arrêté préfectoral du Territoire de Belfort : fixe les prescriptions locales","DDT 90 : contrôle du respect du programme d'actions lors des visites exploitations","Conditionnalité PAC renforcée : BCAE 1 (zones tampons), BCAE 9 (pas d'épandage sur terres inondées)"],"consequences":["Contrôles inopinés de la DDT 90 avec sanctions financières PAC possibles","Mise en demeure préfectorale si pollution avérée du captage AEP","Responsabilité civile de l'exploitant si dommages causés aux tiers","Interdiction temporaire d'épandage sur certaines parcelles sensibles"]},"social":{"facteurs":["Qualité de l'eau potable : enjeu de santé publique pour les habitants","Image de l'agriculture locale auprès des consommateurs (circuits courts, qualité)","Initiative 'L'Eau d'Ici' (CCST) : coopération agriculteurs-collectivités exemplaire","Dialogue entre agriculteurs et gestionnaires de l'eau indispensable"],"consequences":["Confiance des consommateurs maintenue si qualité de l'eau préservée","Tensions possibles entre agriculteurs et collectivités gestionnaires de l'eau","Valorisation de l'image agricole si démarche volontaire de réduction des nitrates","Coût de la dépollution de l'eau potable répercuté sur la facture des ménages"]}},"actions":["Consulter le Programme d'Actions Nitrates applicable (arrêté préfectoral en vigueur)","Réaliser un plan de fumure prévisionnel avec la Chambre d'Agriculture du 90","Vérifier la capacité de stockage des effluents (minimum 6 mois réglementaire)","Contacter la CCST pour l'initiative 'L'Eau d'Ici' et les aides MAEC disponibles"],"refs":[{"n":"C40","t":"Zones vulnérables nitrates"},{"n":"C48","t":"Prélèvements eau"}]},{"id":"zone-monument-historique","zone_types":["perimetre_MH","MH_classe","MH_inscrit"],"zone_layers":["patrimoine"],"zone_distance":500,"types_projets":["logement","zae","equipement","energie","transport","friche"],"nom":"Périmètre de protection Monument Historique (500m)","ico":"🏛","niv":"moyen","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est situé dans le périmètre de 500m d'un Monument Historique (Citadelle Vauban, Lion de Belfort ou autre MH du 90)","Le périmètre de protection des abords concerne tout ce qui est visible depuis le monument ou en covisibilité","5 monuments classés ou inscrits dans le Territoire de Belfort dont la Citadelle Vauban (classée UNESCO)","Intégration paysagère et architecturale renforcée dans les secteurs protégés"],"consequences":["Obligation d'intégration architecturale et paysagère selon les prescriptions de l'ABF","Restriction des matériaux, couleurs, hauteurs et volumes constructibles","Impact visuel du projet sur le monument et ses abords strictement contrôlé","Impossibilité de certains aménagements (antennes, enseignes, menuiseries discordantes)"]},"economique":{"facteurs":["Coût d'un architecte du patrimoine ou DPLG qualifié maîtrise d'œuvre : +15 à +30%","Matériaux traditionnels imposés par l'ABF : surcoût de 10 à 25%","Délai d'instruction majoré de 1 à 2 mois pour l'avis ABF conforme","Potentielle valorisation patrimoniale du bien si bien intégré"],"consequences":["Surcoût global de 15 à 40% selon les prescriptions architecturales imposées","Valeur patrimoniale du bien augmentée si belle intégration dans le site protégé","Risque financier si l'ABF s'oppose au projet après engagement des études","Coût de reprise architecturale si premier projet refusé par l'ABF"]},"politique":{"facteurs":["Code du Patrimoine art. L.621-30 : avis conforme de l'ABF obligatoire dans les abords","UDAP 90 (Architecte des Bâtiments de France) : interlocuteur incontournable","Périmètre délimité des abords (PDA) possible en substitution du rayon de 500m","Site patrimonial remarquable (SPR) : protection renforcée dans certains secteurs"],"consequences":["Avis conforme ABF : opposition = refus du permis garanti sans recours possible hors juridictionnel","Délai d'instruction de 3 mois pour les permis en périmètre protégé (au lieu de 2)","Recours hiérarchique possible auprès du Préfet de Région si avis défavorable injustifié","Obligation de consultations préalables avec l'UDAP 90 avant dépôt du dossier"]},"social":{"facteurs":["Attachement fort des habitants au patrimoine historique de Belfort (Citadelle, Lion)","Tourisme patrimonial : 500 000 visiteurs/an à la Citadelle de Belfort","Identité territoriale et fierté locale fortement ancrées dans le patrimoine militaire","Sensibilité des associations de défense du patrimoine aux projets dans les abords"],"consequences":["Opposition locale si projet perçu comme attentatoire au patrimoine","Image du porteur de projet améliorée si intégration exemplaire","Contribution à l'attractivité touristique du territoire si projet valorisant","Pression médiatique et associative forte en cas de projet controversé"]}},"actions":["Prendre contact avec l'UDAP 90 (ABF) AVANT de déposer le permis pour un avis informel","Faire appel à un architecte du patrimoine (DPLG ou DESA) pour la conception","Préparer un dossier d'insertion paysagère et architecturale détaillé","Prévoir un délai d'instruction de 3 mois minimum pour les dossiers en périmètre MH"],"refs":[{"n":"C88","t":"Monuments historiques"},{"n":"C90","t":"Archéologie préventive"}]},{"id":"zone-AU","zone_types":["zone_AU","zone_AUx"],"zone_layers":["urbanisme"],"zone_distance":0,"types_projets":["logement","zae","equipement"],"nom":"Zone AU — Urbanisation future conditionnelle","ico":"📋","niv":"moyen","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est localisé en zone AU (à urbaniser) du PLU, terrain non encore aménagé","Consommation d'espace naturel ou agricole à vérifier au regard de la loi ZAN","Réseaux d'infrastructure (eau, assainissement, voirie) non encore réalisés","Etude d'incidence environnementale requise selon la superficie de la zone"],"consequences":["Artificialisation des sols comptabilisée dans le bilan ZAN de la commune","Obligation de desserte par les réseaux avant toute construction","Possible étude d'impact si zone AU > 5 ha avec enjeux environnementaux","Création d'imperméabilisation à compenser par une gestion EP à la source"]},"economique":{"facteurs":["Coût de viabilisation de la zone AU (voirie, réseaux) : 100 à 300 €/m² de terrain","Participation aux équipements publics (PUP, ZAC) à négocier avec la commune","Taxe d'aménagement applicable sur toute la surface de plancher créée","Financement de l'OAP (Orientation d'Aménagement et de Programmation) requis"],"consequences":["Coût global de la viabilisation à intégrer dans le bilan de l'opération","Participation aux équipements publics pouvant représenter 5 à 15% du coût total","Nécessité d'une étude de faisabilité économique avant lancement","Valeur foncière à terme attractive si zone bien localisée et desservie"]},"politique":{"facteurs":["Ouverture de la zone AU conditionnée à la délibération du conseil municipal","Zone 2AU : ouverture à l'urbanisation nécessite une révision ou modification du PLU","Compatibilité avec le SCoT du Territoire de Belfort et son document d'orientation","Respect de l'OAP (Orientation d'Aménagement et de Programmation) du PLU"],"consequences":["Blocage possible si la commune refuse d'ouvrir la zone AU à l'urbanisation","Délai de 6 à 18 mois si révision du PLU nécessaire pour ouvrir une zone 2AU","Instruction du PC vérificant la compatibilité avec l'OAP applicable","Risque de remise en cause lors de la révision du PLU en cours (SCoT, ZAN)"]},"social":{"facteurs":["Débat local sur l'opportunité d'ouvrir de nouvelles zones à l'urbanisation","Besoins en équipements publics générés par la nouvelle population (école, crèche)","Acceptabilité sociale variable selon la nature et la densité du projet","Concertation possible avec les riverains lors de la création d'une ZAC"],"consequences":["Opposition des riverains si projet non concerté ou mal intégré","Demande de services et d'équipements par les nouveaux habitants","Valorisation de l'image communale si projet exemplaire et bien conçu","Pression sur les services publics locaux (école, déchets, transport)"]}},"actions":["Vérifier si la zone est 1AU (ouverture directe) ou 2AU (révision PLU nécessaire)","Consulter l'OAP du PLU applicable à la zone pour les prescriptions d'aménagement","Contacter la commune pour connaître les conditions d'ouverture et les participations requises","Vérifier la compatibilité du projet avec les orientations du SCoT du Territoire de Belfort"],"refs":[{"n":"C65","t":"Documents urbanisme opposables"},{"n":"C66","t":"Procédures en cours"},{"n":"C69","t":"Sobriété foncière"}]},{"id":"zone-foret","zone_types":["foret","reservoir"],"zone_layers":["biodiversite"],"zone_distance":50,"types_projets":["logement","zae","energie","transport","agriculture","nature"],"nom":"Zone forestière — Défrichement réglementé","ico":"🌲","niv":"moyen","tmin":1,"axes":{"environnement":{"facteurs":["Le projet est localisé dans ou à proximité d'une zone forestière (43% du territoire du 90 est boisé)","La forêt joue un rôle essentiel : biodiversité, stockage carbone, régulation du cycle de l'eau","Risque d'incendie de forêt croissant avec le changement climatique (épisodes de sécheresse)","Les forêts vosgiennes constituent le principal réservoir de biodiversité TVB du département"],"consequences":["Défrichement soumis à autorisation préfectorale systématique (code forestier)","Compensation du défrichement : reboisement 2x la surface défrichée ou paiement d'une indemnité","Risque de déstabilisation des versants si couvert forestier retiré (érosion, glissements)","Perte du stockage carbone forestier (contribution aux émissions GES)"]},"economique":{"facteurs":["Coût de l'autorisation de défrichement et des études préalables : 2 000 à 10 000 €","Coût de la compensation par reboisement : 3 000 à 8 000 €/ha replanté","Valeur du bois exploitable sur la parcelle à intégrer dans le bilan économique","Subventions possibles pour les projets de boisement compensatoire (France Relance)"],"consequences":["Surcoût de 5 à 15% si défrichement important requis","Délai de 6 à 18 mois pour l'obtention de l'autorisation de défrichement","Valeur foncière du terrain forestier différente du terrain constructible","Possibilité de valorisation sylvicole préalable au défrichement"]},"politique":{"facteurs":["Code forestier art. L.341-1 : autorisation de défrichement obligatoire","ONF (Office National des Forêts) : avis sur les projets en forêt publique","CNPF (Centre National de la Propriété Forestière) : conseil pour les forêts privées","Politique nationale forêt 2015 : gestion durable et multifonctionnelle"],"consequences":["Refus d'autorisation de défrichement si terrain en zone à risques ou protégée","Instruction par la DDT 90 (service forêt) avec consultation de l'ONF si forêt publique","Obligation de Plan Simple de Gestion (PSG) pour les forêts > 25 ha","Amendes et obligation de reboisement si défrichement illicite"]},"social":{"facteurs":["Attachement des habitants aux massifs forestiers vosgiens (randonnée, cueillette, chasse)","Rôle de la forêt dans la régulation climatique locale (îlots de fraîcheur en été)","Filière bois-énergie locale et emplois sylvicoles dans le massif vosgien","Sensibilité du grand public à la déforestation (contexte mondial)"],"consequences":["Opposition locale si défrichement visible et non compensé localement","Contribution à la perception négative du projet par les habitants","Impact sur les activités récréatives forestières (sentiers de randonnée, VTT)","Risque d'image négative dans un contexte de sensibilisation à la déforestation"]}},"actions":["Vérifier la nature publique ou privée de la forêt (cadastre, extrait de propriété)","Déposer une demande d'autorisation de défrichement auprès de la DDT 90 (service forêt)","Contacter l'ONF (forêts publiques) ou le CRPF (forêts privées) pour un conseil préalable","Prévoir la compensation par reboisement dès la conception du projet"],"refs":[{"n":"C57","t":"Couverture forestière"},{"n":"C63","t":"Aléas feux de forêts"}]},{"id":"zone-zppa-archeo","zone_types":["zppa","site_archeo"],"zone_layers":["patrimoine"],"zone_distance":0,"types_projets":["logement","zae","equipement","transport","friche"],"nom":"Zone archéologique — Diagnostic préventif obligatoire","ico":"🏺","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est localisé dans une Zone de Présomption de Prescription Archéologique (ZPPA) ou à proximité d'un vestige archéologique connu","Vestiges gallo-romains, médiévaux et industriels recensés dans le Territoire de Belfort","Voie romaine Mandeure–Mandeure traversant la plaine de Belfort (inscrite à l'inventaire)"],"consequences":["Diagnostic archéologique préventif prescrit par le Préfet de région avant tout terrassement","Découverte fortuite possible : arrêt immédiat du chantier obligatoire","Fouille archéologique si vestiges significatifs : délai et coût imprévisibles"]},"economique":{"facteurs":["Coût du diagnostic archéologique préventif : 5 000 à 30 000 € (partiellement à la charge de l'aménageur)","Fouille : de 50 000 € à plusieurs centaines de milliers d'euros si site majeur","Délai supplémentaire de 3 à 18 mois selon l'ampleur des découvertes"],"consequences":["Budget et planning à prévoir avec une marge de 5 à 10 % pour l'archéologie préventive","Risque de blocage du chantier si vestiges majeurs découverts sans prévision","Valorisation possible des découvertes (musée, circuit touristique)"]},"politique":{"facteurs":["Loi 2001-44 sur l'archéologie préventive : diagnostic obligatoire en ZPPA","Instruction par la DRAC BFC (Direction Régionale des Affaires Culturelles)","Prescription émise par arrêté du Préfet de région en amont du permis"],"consequences":["PC assorti d'une prescription archéologique préalable aux travaux de terrassement","Arrêt de chantier obligatoire en cas de découverte fortuite (Code du patrimoine)","Responsabilité pénale si découverte ignorée et travaux poursuivis"]},"social":{"facteurs":["Patrimoine archéologique local : identité culturelle et mémoire collective","Intérêt du grand public pour les découvertes archéologiques locales","Retards de chantier vécus négativement par les riverains et les futurs occupants"],"consequences":["Valorisation du territoire si découverte significative (exposition, médiation culturelle)","Frustration des porteurs de projet et des riverains en cas de blocage prolongé","Enrichissement du patrimoine historique local si site fouillé et documenté"]}},"actions":["Interroger la DRAC BFC dès le dépôt du PC pour savoir si une prescription est envisagée","Prévoir un délai de 3 à 6 mois pour le diagnostic dans le planning général","Budgéter une provision de 3 à 5 % du coût de construction pour l'archéologie préventive","Contacter le service régional de l'archéologie (SRA BFC) pour les projets > 5 000 m²"],"refs":[{"n":"C90","t":"Archéologie préventive"}]},{"id":"zone-grand-site","zone_types":["grand_site"],"zone_layers":["patrimoine","biodiversite"],"zone_distance":0,"types_projets":["logement","energie","transport","zae","equipement","nature"],"nom":"Opération Grand Site — Ballon d'Alsace","ico":"🏔","niv":"eleve","tmin":2,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est dans le périmètre de l'Opération Grand Site du Ballon d'Alsace (OGS C89)","Site naturel exceptionnel à forte fréquentation touristique (>400 000 visiteurs/an)","Milieux naturels d'altitude sensibles : tourbières, pelouses d'altitude, hêtraies-sapinières"],"consequences":["Toute intervention dans le périmètre OGS est soumise à un examen renforcé","Obligation de compatibilité avec le plan de gestion du Grand Site","Risque de dégradation des milieux naturels et du paysage si intégration insuffisante"]},"economique":{"facteurs":["Exigences architecturales et paysagères élevées : surcoût de 10 à 25 %","Label 'Grand Site de France' valorisable économiquement si projet exemplaire","Attractivité touristique du site : retombées économiques locales significatives"],"consequences":["Coût de conception et d'étude paysagère majoré","Valeur du projet renforcée si labellisation Grand Site obtenue","Risque de contentieux si projet perçu comme dégradant le site"]},"politique":{"facteurs":["Réseau des Grands Sites de France : charte et engagements de gestion durable","Conseil Départemental du 90 : maître d'ouvrage de l'OGS","Avis obligatoire de la DREAL BFC et du Conseil Départemental pour les projets dans l'OGS"],"consequences":["Instruction renforcée : consultation de la DREAL, du CD90 et du SDAP","Délais d'instruction majorés de 2 à 4 mois","Refus probable si projet en contradiction avec le plan de gestion OGS"]},"social":{"facteurs":["Identité forte du Territoire de Belfort autour du Ballon d'Alsace","Tourisme naturel et sportif : ski, randonnée, VTT, escalade","Sensibilité des habitants et des associations à la préservation du Grand Site"],"consequences":["Opposition locale forte si projet perçu comme dégradant le Grand Site","Valorisation touristique et économique si projet s'inscrit dans la démarche OGS","Pression médiatique nationale si site labellisé menacé"]}},"actions":["Prendre contact avec le Conseil Départemental du 90 (gestionnaire de l'OGS) en amont","Consulter le plan de gestion du Grand Site Ballon d'Alsace","Intégrer une étude paysagère et d'impact visuel dans le dossier","Contacter la DREAL BFC pour un cadrage préalable si projet > 1 ha dans l'OGS"],"refs":[{"n":"C89","t":"Opération Grand Site Ballon d'Alsace"}]},{"id":"zone-reserve-naturelle","zone_types":["reserve"],"zone_layers":["biodiversite"],"zone_distance":0,"types_projets":["logement","zae","energie","transport","agriculture","nature"],"nom":"Réserve Naturelle Nationale — Protection maximale","ico":"🦅","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est dans ou à proximité de la Réserve Naturelle Nationale des Ballons des Vosges","Habitats naturels d'intérêt européen : tourbières, pelouses d'altitude, forêts de hêtres-sapins","Espèces protégées : Grand Tétras, Faucon pèlerin, Lynx, Castor d'Europe"],"consequences":["Interdiction de principe des travaux de construction dans le cœur de réserve","Autorisation exceptionnelle du préfet requise pour tout aménagement","Impact sur les espèces protégées = dérogation CNPN obligatoire"]},"economique":{"facteurs":["Coût des études naturalistes réglementaires : 20 000 à 80 000 €","Dérogation espèces protégées : procédure longue et coûteuse (6 à 18 mois)","Risque financier majeur : projet potentiellement non réalisable dans le cœur de réserve"],"consequences":["Abandon ou déplacement du projet si localisé dans le cœur de la réserve","Budget études multiplié par 3 à 5 par rapport à un site ordinaire","Valeur patrimoniale du site préservé : bénéfice économique indirect pour le tourisme"]},"politique":{"facteurs":["Code de l'environnement L332-1 à L332-27 : protection réglementaire absolue","Plan de gestion de la RNN Ballons des Vosges approuvé par arrêté ministériel","DREAL BFC : autorité gestionnaire, consultation obligatoire"],"consequences":["Refus garanti si projet dans le cœur de réserve sans dérogation ministérielle","Instruction par le Ministère de l'Environnement si projet impactant","Procédure contentieuse quasi-systématique si autorisation accordée à tort"]},"social":{"facteurs":["RNN Ballons des Vosges : patrimoine naturel reconnu à l'échelle nationale","Tourisme scientifique et naturaliste : activité économique locale","Mobilisation forte des associations de protection de la nature"],"consequences":["Opposition nationale des associations si projet dans la réserve","Valorisation territoriale exceptionnelle si projet de renaturation compatible","Sensibilisation des jeunes publics et éducation à l'environnement"]}},"actions":["Vérifier si le projet est dans le cœur ou en périphérie de la réserve (DREAL BFC)","Consulter le plan de gestion de la RNN avant toute étude de faisabilité","Contacter la DREAL BFC pour une position préalable sur la faisabilité","Envisager une relocalisation du projet hors du périmètre de la réserve"],"refs":[{"n":"C52","t":"Protection patrimoine naturel"},{"n":"C55","t":"Inventaires naturels"}]},{"id":"zone-argiles","zone_types":["argiles_moyen"],"zone_layers":["risques"],"zone_distance":0,"types_projets":["logement","zae","equipement","friche"],"nom":"Retrait-gonflement des argiles — Étude géotechnique obligatoire","ico":"🧱","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est dans une zone d'aléa moyen au retrait-gonflement des argiles (loi ELAN 2018)","Phénomène amplifié par les sécheresses successives liées au changement climatique","Cycles d'humidification/dessiccation des sols argileux provoquant des mouvements différentiels"],"consequences":["Fissuration des murs, décollement des façades, rupture des réseaux enterrés","Dommages estimés à 1,5 Md€/an en France, en forte hausse depuis 2017","Sinistres concentrés sur les constructions sans étude géotechnique préalable"]},"economique":{"facteurs":["Étude géotechnique G1+G2 obligatoire avant dépôt du PC (loi ELAN 2018) : 3 000 à 8 000 €","Surcoût des fondations adaptées (longrines, radier, puits) : 5 000 à 20 000 €","Sinistres argiles : coût moyen de 15 000 à 50 000 € par maison sinistrée"],"consequences":["Obligation légale générant un surcoût non négociable mais évitant des sinistres coûteux","Garantie décennale invalidée si étude G2 absente en zone exposée","Indemnisation via assurance catastrophe naturelle après arrêté préfectoral CatNat"]},"politique":{"facteurs":["Loi ELAN 2018 : études G1+G2 obligatoires pour les maisons individuelles en zone exposée","Arrêté de catastrophe naturelle requis pour l'indemnisation assurance","PC non instruit si étude géotechnique absente dans les zones d'exposition forte"],"consequences":["Instruction du PC conditionnée à la fourniture de l'étude géotechnique","Responsabilité du constructeur engagée en cas de sinistre sans étude","Contrôle possible par la DDT 90 lors de l'instruction du permis"]},"social":{"facteurs":["Impact psychologique sur les propriétaires face aux fissures évolutives","Litige fréquent constructeur/propriétaire sur l'origine des désordres","3,4 millions de maisons individuelles exposées au risque argiles en France"],"consequences":["Stress et dévalorisation du bien résidentiel si sinistre non indemnisé","Procédures judiciaires longues (5 à 10 ans) pour l'indemnisation des sinistres","Besoin d'information des propriétaires sur les mesures préventives simples"]}},"actions":["Commander obligatoirement une étude G1 + G2 auprès d'un géotechnicien avant le PC","Appliquer les mesures constructives : fondations profondes, drainage périphérique","Éviter les plantations d'arbres gourmands en eau à moins de 5 m du bâtiment","Consulter la carte BRGM retrait-gonflement argiles : argiles.fr"],"refs":[{"n":"C61","t":"Aléa retrait-gonflement argiles"}]},{"id":"zone-captage-aep","zone_types":["captage_aep"],"zone_layers":["eau"],"zone_distance":500,"types_projets":["logement","zae","equipement","agriculture","transport","friche"],"nom":"Captage AEP — Périmètre de protection de l'eau potable","ico":"🚰","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est à moins de 500 m d'un captage d'alimentation en eau potable (AEP)","Périmètre de protection immédiate (PPI), rapprochée (PPR) ou éloignée (PPE) potentiellement applicable","Captages Savoureuse et Allaine : alimentation en eau potable de Belfort et des communes environnantes"],"consequences":["Interdiction de toute activité polluante dans le périmètre de protection immédiate","Restrictions sévères dans le périmètre rapproché (stockage, épandage, assainissement)","Pollution accidentelle pouvant rendre le captage inutilisable et priver d'eau des milliers d'habitants"]},"economique":{"facteurs":["Coût de dépollution d'un captage contaminé : de 500 000 € à plusieurs millions d'euros","Restrictions imposées par le PPR pouvant rendre certains projets non réalisables","Coût des études hydrogéologiques pour les projets dans les PPR : 5 000 à 20 000 €"],"consequences":["Refus systématique dans le périmètre immédiat pour toute activité potentiellement polluante","Prescriptions spéciales dans le PPR : surcoût de 5 à 15 % du coût total du projet","Responsabilité financière illimitée du pollueur si contamination du captage avérée"]},"politique":{"facteurs":["Code de la santé publique art. L1321-2 : périmètres de protection obligatoires","DUP (Déclaration d'Utilité Publique) des périmètres : annexée au PLU","Consultation ARS BFC obligatoire pour tout projet dans les périmètres de protection"],"consequences":["Avis conforme de l'ARS BFC requis : son refus bloque le permis","Arrêté préfectoral fixant les activités interdites et réglementées dans les périmètres","Hydrogéologue agréé obligatoire pour les études d'impact sur les périmètres"]},"social":{"facteurs":["Santé publique : qualité de l'eau potable pour les 145 000 habitants du Territoire de Belfort","Droit à l'eau potable : enjeu de santé publique fondamental","Confiance des habitants dans la qualité de l'eau du robinet"],"consequences":["Coupure d'eau ou mise hors service du captage si contamination : impact sur toute la population desservie","Coût de substitution (eau en bouteille, approvisionnement alternatif) très élevé","Procès et indemnisations des victimes si pollution avérée liée au projet"]}},"actions":["Identifier précisément les périmètres de protection du captage (DDT 90 ou ARS BFC)","Consulter l'ARS BFC AVANT tout dépôt de permis si le projet est dans un périmètre","Éviter tout stockage de produits dangereux, assainissement non conforme ou déversement","Contacter ARS BFC : 03 63 35 34 00 — ars-bfc-dt90@ars.sante.fr"],"refs":[{"n":"C48","t":"Prélèvements eau et captages AEP"}]},{"id":"zone-sismique-2","zone_types":["sismique_2"],"zone_layers":["risques"],"zone_distance":0,"types_projets":["equipement","logement","zae"],"nom":"Zone de sismicité 2 — Règles parasismiques applicables","ico":"🌋","niv":"faible","tmin":2,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Zone de sismicité 2 (faible) : plaine de Belfort, plateaux du Jura et Sundgau","Risque sismique modéré mais réel pour les bâtiments de grande capacité","Historique : séismes de magnitude 3 à 4 régulièrement ressentis"],"consequences":["Risque limité pour les constructions légères mais significatif pour les ERP","Amplification possible sur les terrains alluviaux saturés (effet de site)"]},"economique":{"facteurs":["Surcoût parasismique limité en zone 2 : moins de 2 % du coût du gros œuvre","Études géotechniques recommandées pour les ERP en zone 2"],"consequences":["Impact budgétaire minimal mais obligatoire pour certaines catégories de bâtiments","Contrôle technique requis pour les ERP de catégories III et IV"]},"politique":{"facteurs":["Décret du 22 octobre 2010 : zonage sismique réglementaire, zone 2 = aléa faible","Eurocode 8 applicable à partir de la catégorie d'importance II en zone 2","Arrêté du 22 octobre 2010 : règles de construction applicables"],"consequences":["ERP de grandes capacités (catégories III, IV) soumis aux règles parasismiques en zone 2","Contrôle technique obligatoire pour les IGH et ERP de catégorie IV"]},"social":{"facteurs":["Faible perception du risque sismique dans la plaine de Belfort","ERP accueillant du public : responsabilité de sécurité des usagers"],"consequences":["Protection des occupants via les règles parasismiques même en aléa faible","Sensibilisation recommandée pour les gestionnaires d'ERP"]}},"actions":["Vérifier la catégorie d'importance du bâtiment (I à IV) pour déterminer les obligations","Appliquer l'Eurocode 8 pour les ERP de catégories II à IV","Consulter un bureau d'études structure pour les bâtiments > R+3 ou ERP en zone 2"],"refs":[{"n":"C59","t":"Risque sismique — zones 2 et 3"}]},{"id":"zone-bruit","zone_types":["bruit_1","trafic_fort"],"zone_layers":["mobilite"],"zone_distance":0,"types_projets":["logement","equipement","zae"],"nom":"Secteur affecté par le bruit des transports","ico":"🔊","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est dans un secteur affecté par le bruit des infrastructures de transport (A36, RN19)","Niveaux sonores dépassant 65 dB(A) en façade dans les zones les plus exposées","Pollution atmosphérique liée aux axes routiers : NO2, PM10, PM2.5"],"consequences":["Obligation d'isolation acoustique renforcée pour tous les logements et ERP","Impact sur la santé des futurs occupants : troubles du sommeil, maladies cardiovasculaires","Qualité de l'air dégradée à moins de 200 m des axes à fort trafic"]},"economique":{"facteurs":["Isolation acoustique renforcée (catégorie 1 : DnT,A ≥ 40 dB) : 5 000 à 20 000 € par logement","VMC double flux avec filtration anti-pollution recommandée : 3 000 à 8 000 €","Dépréciation de la valeur vénale des biens dans les zones très exposées"],"consequences":["Surcoût de construction de 3 à 8 % pour respecter les exigences acoustiques","Réduction de la valeur locative et vénale si bruit résiduel perçu","Attestation acoustique obligatoire : coût d'étude de 500 à 2 000 €"]},"politique":{"facteurs":["Classement sonore des voies : arrêté préfectoral annexé au PLU — opposable","Attestation acoustique obligatoire à joindre au PC pour les logements (décret 2011-604)","Norme NF S 31-010 et arrêté du 25 avril 2003 sur les objectifs d'isolation"],"consequences":["Permis refusé si attestation acoustique absente pour les logements","Réception de chantier conditionnée aux mesures acoustiques in situ","Obligation d'information des futurs acquéreurs sur le classement sonore"]},"social":{"facteurs":["OMS : exposition chronique > 65 dB(A) augmente le risque cardiovasculaire de 20 %","Inégalités sociales d'exposition : logements sociaux souvent proches des axes routiers","Gêne sonore : premier facteur de nuisance déclaré par les Français"],"consequences":["Perturbation du sommeil, stress chronique, difficultés de concentration pour les occupants","Obligation de conception bioclimatique avec pièces de vie orientées côté calme","Plan de prévention du bruit dans l'environnement (PPBE) : mesures de résorption prévues"]}},"actions":["Consulter l'annexe bruit du PLU (classement sonore des voies) avant le dépôt du PC","Commander une étude acoustique par un bureau agréé dès l'avant-projet (obligatoire)","Orienter les chambres et séjours du côté calme (opposé à la voie bruyante)","Prévoir une VMC double flux avec filtration si axe < 200 m"],"refs":[{"n":"C84","t":"Carte stratégique bruit"},{"n":"C85","t":"Classement sonore voies"},{"n":"C82","t":"Trafic routier"}]},{"id":"zone-qpv","zone_types":["qpv"],"zone_layers":["habitat"],"zone_distance":0,"types_projets":["logement","equipement","zae","friche"],"nom":"Quartier Prioritaire de la Ville (QPV) — Politique de la ville","ico":"🏘","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est localisé dans un Quartier Prioritaire de la Ville du Territoire de Belfort","7 QPV dans le 90 (révision 2024) : Résidences Belfort, Offemont, Bavilliers, Valdoie","Enjeux de renouvellement urbain : désimperméabilisation, végétalisation, espaces de vie"],"consequences":["Opportunité de renaturation urbaine finançable via le Fonds vert (volet cadre de vie)","Amélioration de la biodiversité urbaine si végétalisation des espaces communs","Réduction des îlots de chaleur urbains par les aménagements paysagers"]},"economique":{"facteurs":["Aides ANRU (Agence Nationale pour la Rénovation Urbaine) pour les projets de rénovation","Exonérations fiscales ZFU-TE pour les entreprises s'installant dans les QPV","Programme national Action Cœur de Ville pour Belfort (financements dédiés)"],"consequences":["Financements complémentaires disponibles si projet cohérent avec le contrat de ville","Attractivité commerciale parfois réduite dans les QPV stigmatisés","Valorisation à long terme si projet de qualité intégré à la stratégie de rénovation"]},"politique":{"facteurs":["Contrat de ville du Territoire de Belfort : gouvernance EPCI + État + associations","Programme ANRU : projets de rénovation urbaine des QPV cofinancés par l'État","Obligation de concertation avec les habitants pour les projets ANRU"],"consequences":["Accès aux financements ANRU et Fonds vert si projet validé par le contrat de ville","Concertation obligatoire avec les habitants : délais de concertation à prévoir","Cohérence exigée avec la stratégie locale de politique de la ville"]},"social":{"facteurs":["Populations confrontées aux inégalités : chômage, précarité, mixité sociale insuffisante","15 200 habitants en QPV dans le Territoire de Belfort (données 2024)","Besoins en équipements, services de proximité, espaces verts et sécurité"],"consequences":["Amélioration de la qualité de vie si projet de qualité bien concerté avec les habitants","Risque de gentrification si rénovation sans maintien du parc social","Renforcement du lien social et de la sécurité si espaces publics de qualité"]}},"actions":["Contacter Grand Belfort (service politique de la ville) pour les financements ANRU disponibles","Vérifier si le projet est éligible au Fonds vert volet cadre de vie et renouvellement urbain","Organiser une concertation avec les habitants du quartier dès la phase de conception","Intégrer une démarche de mixité fonctionnelle (logements, commerces, équipements)"],"refs":[{"n":"C80","t":"Quartiers prioritaires de la ville (QPV)"}]},{"id":"zone-sage-allan","zone_types":["sage"],"zone_layers":["eau"],"zone_distance":0,"types_projets":["zae","equipement","energie","transport","agriculture","friche"],"nom":"SAGE Allan — Compatibilité eau obligatoire","ico":"💧","niv":"moyen","tmin":2,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est dans le périmètre du SAGE Allan (Schéma d'Aménagement et de Gestion des Eaux)","SAGE Allan couvre l'ensemble du Territoire de Belfort et ses bassins versants","Seulement 15 % des masses d'eau du 90 en bon état écologique — objectif DCE 2027"],"consequences":["Obligation de compatibilité du projet avec les orientations du SAGE Allan","Vigilance sur les rejets d'eaux pluviales, les prélèvements et l'imperméabilisation","Dossier loi sur l'eau (IOTA) potentiellement requis selon l'impact hydraulique du projet"]},"economique":{"facteurs":["Coût des études hydrauliques si projet près d'un cours d'eau (IOTA) : 5 000 à 30 000 €","Financement Agence de l'eau RMC possible pour les projets de restauration ou renaturation","Investissement dans les systèmes de rétention et traitement des eaux pluviales"],"consequences":["Budget études majoré si dossier IOTA requis","Financement partiel possible pour les projets vertueux (Agence de l'eau)","Coût de mise en conformité des réseaux d'eaux pluviales si projet d'extension"]},"politique":{"facteurs":["SAGE Allan approuvé : règlement opposable aux tiers depuis 2015","Commission Locale de l'Eau (CLE) : instance de gouvernance du SAGE","DDT 90 (police de l'eau) : contrôle de la compatibilité des projets avec le SAGE"],"consequences":["Compatibilité du PLU, des SCoT et des PC avec le SAGE obligatoire","Instruction du dossier IOTA avec consultation de la CLE pour les projets impactants","Refus de permis si incompatibilité avérée avec le règlement du SAGE"]},"social":{"facteurs":["Enjeu transfrontalier : gestion partagée de l'eau avec la Suisse et le Doubs","Qualité de l'eau potable pour 145 000 habitants du Territoire de Belfort","Activités récréatives liées à l'eau (pêche, baignade, canoë)"],"consequences":["Coopération internationale indispensable pour l'amélioration de l'état des masses d'eau","Santé publique directement liée à la qualité des captages AEP en aval","Valeur touristique des cours d'eau liée à leur qualité écologique"]}},"actions":["Vérifier la compatibilité du projet avec les orientations fondamentales du SAGE Allan","Contacter la DDT 90 (service eau) pour connaître les obligations spécifiques au projet","Déposer un dossier IOTA si le projet affecte le régime hydraulique ou la qualité de l'eau","Consulter la CLE (Commission Locale de l'Eau) pour les projets d'envergure"],"refs":[{"n":"C43","t":"SAGE Allan"},{"n":"C44","t":"État écologique masses d'eau"}]},{"id":"zone-moustique-tigre","zone_types":["moustique"],"zone_layers":["patrimoine"],"zone_distance":0,"types_projets":["logement","equipement","zae","nature"],"nom":"Zone de surveillance moustique tigre — Enjeu sanitaire","ico":"🦟","niv":"faible","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est dans la zone de surveillance active du moustique tigre (Aedes albopictus — Atlas C91)","Présence confirmée en Nord Franche-Comté depuis 2023, en expansion vers le nord","Eaux stagnantes sur l'emprise du projet = gîtes larvaires potentiels"],"consequences":["Vecteur de dengue, chikungunya et zika : 5 cas de dengue importés en NFC en 2024","Obligation de supprimer tout gîte larvaire sur l'emprise du projet","Confort d'usage dégradé si moustique tigre non pris en compte dans la conception"]},"economique":{"facteurs":["Coût de démoustication professionnelle si prolifération : 1 000 à 5 000 €/an","Conception paysagère à adapter : éviter les pièges à eau stagnante (soucoupes, bassin sans circulation)"],"consequences":["Surcoût de gestion des espaces extérieurs si gîtes larvaires non maîtrisés","Responsabilité du gestionnaire si gîtes non traités entraînent une nuisance sanitaire"]},"politique":{"facteurs":["Signalement obligatoire à l'ARS BFC en cas de foyer de dengue locale","Plan national de lutte contre le moustique tigre (ANSES) : signalement sur signalement-moustique.anses.fr"],"consequences":["Obligation du gestionnaire de traiter les gîtes larvaires sur l'emprise","Responsabilité administrative si nuisance sanitaire liée à un gîte non traité"]},"social":{"facteurs":["Nuisance croissante pour les usagers des espaces extérieurs en été","Risque sanitaire faible actuellement mais en progression avec le changement climatique","Sensibilisation des occupants et des gestionnaires recommandée"],"consequences":["Inconfort des usagers si espaces extérieurs infestés en été","Information et sensibilisation des futurs occupants sur les gestes préventifs","Contribution à la lutte collective contre la propagation de l'espèce"]}},"actions":["Éliminer tout gîte à eau stagnante dans la conception (soucoupes, gouttières bouchées, creux de terrasse)","Utiliser des fontaines ou bassins avec circulation d'eau active","Signaler les gîtes à l'ARS BFC ou sur signalement-moustique.anses.fr","Former le personnel d'entretien à la détection et l'élimination des gîtes larvaires"],"refs":[{"n":"C91","t":"Moustique tigre — enjeu sanitaire"}]},{"id":"zone-feux-foret","zone_types":["feux_foret"],"zone_layers":["risques"],"zone_distance":0,"types_projets":["logement","zae","equipement","nature"],"nom":"Aléa feux de forêt — Obligation Légale de Débroussaillement","ico":"🔥","niv":"moyen","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est dans une zone d'aléa feux de forêt identifiée (Atlas C63, massif vosgien)","Risque de feux de végétation en hausse sous l'effet du changement climatique dans le 90","Sécheresses estivales de plus en plus fréquentes et intenses dans la région BFC"],"consequences":["Destruction totale possible du bâtiment si incendie de forêt à proximité","Obligation Légale de Débroussaillement (OLD) dans un rayon de 50 m autour des constructions","Dégradation de la biodiversité forestière post-incendie (temps de régénération : 20 à 40 ans)"]},"economique":{"facteurs":["Coût annuel du débroussaillement obligatoire : 500 à 2 000 € selon la surface","Surprime d'assurance incendie/multirisque en zone boisée classée","Coût de la réserve d'eau (citerne enterrée) si zone isolée du réseau : 5 000 à 15 000 €"],"consequences":["Obligation légale persistante sur toute la durée de vie du bâtiment","Exécution d'office par la commune si OLD non respectée (aux frais du propriétaire)","Valeur d'assurance du bien réduite si OLD non respectée"]},"politique":{"facteurs":["Code forestier art. L134-6 : Obligation Légale de Débroussaillement applicable","Arrêté préfectoral listant les communes soumises à l'OLD dans le 90","SDIS 90 : prescriptions d'accès pour les véhicules de secours (voirie de 4 m minimum)"],"consequences":["PC conditionné au respect des distances minimales aux peuplements forestiers","Arrêté de mise en demeure et astreinte si OLD non exécutée","Refus de permis possible si accès pompiers insuffisant (règlement national d'urbanisme)"]},"social":{"facteurs":["Sécurité des habitants des hameaux vosgiens en lisière de forêt","Isolement des hameaux si routes coupées par un incendie","Culture du risque incendie peu développée en zone vosgienne"],"consequences":["Risque vital pour les occupants si évacuation non préparée","Nécessité d'un plan d'évacuation pour les habitations isolées en zone boisée","Sensibilisation recommandée lors de la remise des clés aux nouveaux propriétaires"]}},"actions":["Vérifier si la commune est listée dans l'arrêté préfectoral OLD du Territoire de Belfort","Respecter l'Obligation Légale de Débroussaillement : 50 m autour de toute construction","Prévoir un accès pompiers de 4 m de large minimum sur toute la longueur de la voirie","Contacter le SDIS 90 pour les prescriptions d'accès et de défense extérieure contre l'incendie"],"refs":[{"n":"C63","t":"Aléa feux de forêts"}]},{"id":"zone-minier","zone_types":["minier"],"zone_layers":["risques"],"zone_distance":200,"types_projets":["logement","zae","equipement","transport","friche"],"nom":"Zone de risque minier — Ancienne exploitation Giromagny","ico":"⛏","niv":"eleve","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Le projet est à moins de 200 m d'une ancienne exploitation minière (mine de Giromagny — plomb, zinc, argent)","Présence de galeries souterraines pouvant s'étendre bien au-delà du périmètre connu","Risque de contamination des sols et des eaux souterraines par les résidus miniers (plomb, arsenic)"],"consequences":["Effondrement différé des terrains au-dessus des galeries (fontis) sans signe précurseur","Contamination possible des sols sous l'emprise : nécessite un diagnostic avant travaux","Impacts sur la nappe phréatique locale si galeries inondées et drainées vers l'extérieur"]},"economique":{"facteurs":["Étude de dangers miniers (BRGM) : 5 000 à 30 000 € selon l'étendue des galeries","Confortement des galeries si nécessaire : 50 000 à 500 000 € selon les travaux","Responsabilité de l'État (BRGM) si exploitant minier défaillant ou inconnu"],"consequences":["Projet potentiellement non réalisable si galeries actives sous l'emprise","Coût de dépollution des sols en surface si contamination aux métaux lourds avérée","Valeur foncière fortement réduite dans le périmètre de risque minier"]},"politique":{"facteurs":["Code minier art. L174-1 : responsabilité de l'État pour les mines abandonnées sans responsable","BRGM : gestionnaire national des risques miniers résiduels","Base de données Géorisques (anciens travaux miniers) : consultation préalable obligatoire","Possible Arrêté de Risque Minier (ARM) de la commune"],"consequences":["Refus de permis si galeries avérées sous l'emprise sans étude de dangers","Instruction de la préfecture requise en zone de risque minier identifié","Enquête publique si travaux de confortement importants nécessaires"]},"social":{"facteurs":["Mémoire minière du Territoire de Belfort : identité industrielle historique de Giromagny","Risque vital en cas d'effondrement brutal d'une galerie sous une habitation","Patrimoine minier valorisable culturellement (musée, circuit touristique)"],"consequences":["Anxiété légitime des riverains vivant au-dessus de galeries identifiées","Valorisation culturelle et touristique du patrimoine minier si bien géré","Nécessité d'information transparente des futurs acquéreurs sur le risque résiduel"]}},"actions":["Consulter la base de données des anciens travaux miniers sur Géorisques (BRGM)","Vérifier l'existence d'un Arrêté de Risque Minier (ARM) auprès de la préfecture du 90","Commander une étude de dangers miniers auprès du BRGM avant tout projet de construction","Contacter la DREAL BFC si le projet jouxte le périmètre de surveillance minière"],"refs":[{"n":"C62","t":"Risque minier — mine de Giromagny"}]},{"id":"zone-friche-nearby","zone_types":["friche"],"zone_layers":["urbanisme"],"zone_distance":100,"types_projets":["logement","zae","equipement","nature"],"nom":"Friche inventoriée à proximité — Alternative ZAN à considérer","ico":"♻","niv":"faible","tmin":1,"contexte_zone":true,"axes":{"environnement":{"facteurs":["Une friche industrielle ou commerciale est inventoriée à moins de 100 m du projet","La reconversion de friche = zéro artificialisation nette (ZAN) vs terrain vierge","Possible pollution des sols à diagnostiquer avant reconversion de la friche"],"consequences":["Choix de la friche contribue positivement au bilan ZAN de la commune","Risque de pollution résiduelle si friche non dépollue avant reconversion","Opportunité de requalification du quartier si friche reconvertie plutôt qu'abandonnée"]},"economique":{"facteurs":["Fonds Friches ADEME : financement du différentiel de coût friche vs terrain vierge (jusqu'à 80 %)","Portage foncier EPF BFC pendant la phase d'étude et de dépollution","Coût de dépollution variable : de 50 000 € à plusieurs millions selon la pollution"],"consequences":["Modèle économique viable si Fonds Friches obtenu (1 € public = 5 à 10 € investis)","Friche non valorisée = perte économique et dégradation du tissu urbain","Valeur foncière du quartier améliorée après reconversion réussie"]},"politique":{"facteurs":["Loi ZAN : obligation de justifier l'absence d'alternative sur friche avant extension sur terrain vierge","Portail BIGAN de la DDT 90 : inventaire des friches disponibles dans le 90","SCoT du Territoire de Belfort : priorité aux friches dans la politique foncière"],"consequences":["Obligation réglementaire de démontrer l'absence d'alternative en friche si consommation d'ENAF","Instruction du PC favorable si recyclage de friche plutôt que terrain vierge","Risque de refus ou de contentieux si friche disponible ignorée"]},"social":{"facteurs":["Friche abandonnée = nuisance visuelle, insécurité, dégradation de l'image du quartier","Reconversion = renouveau urbain et amélioration du cadre de vie des riverains","Mémoire industrielle locale à valoriser dans le projet architectural"],"consequences":["Amélioration du cadre de vie des riverains si friche reconvertie en espace de qualité","Appropriation du nouveau lieu par les habitants si concertation réussie","Modèle de développement durable valorisable dans la communication du projet"]}},"actions":["Consulter le portail BIGAN de la DDT 90 pour vérifier la disponibilité de la friche proche","Évaluer si la friche est mobilisable avant de choisir un terrain vierge","Déposer un dossier Fonds Friches ADEME (portail AGIR) pour le cofinancement","Contacter l'EPF BFC pour le portage foncier et l'accompagnement à la reconversion"],"refs":[{"n":"C70","t":"Réhabilitation des friches"},{"n":"C71","t":"Inventaire des friches dans le 90"}]}];
 
-/**
- * Tente de recharger ENJEUX_ZONES depuis enjeux-data.json via fetch().
- * Sans effet si pas de serveur HTTP — les données embarquées sont utilisées.
- */
+
 function loadEnjeuxZones() {
   return fetch('enjeux-zones.json')
     .then(function(r){ return r.ok ? r.json() : null; })
@@ -4354,11 +3791,6 @@ function loadEnjeuxZones() {
 /* ── Point-in-Polygon : rayon de Casteljau ──────────────────────
    Retourne true si le point (lat,lng) est à l'intérieur du polygon.
    Le polygon est au format GeoJSON [[[lng,lat],...]] */
-/**
- * Algorithme ray-casting : teste si (lat, lng) est dans un polygone.
- * @param  {number[][]} polygonCoords  Tableau [lng, lat] (format GeoJSON)
- * @return {boolean}
- */
 function pointDansPolygone(lat, lng, polygonCoords) {
   var ring = polygonCoords[0];  /* anneau extérieur */
   var inside = false;
@@ -4456,6 +3888,463 @@ function featureContientPoint(feature, lat, lng, rayon) {
 
 /* ── Détecte les zones actives pour une position donnée ─────────
    Retourne un tableau d'objets { enjeu, zonesDetectees } */
+
+/* ── INTERROGATION RPG — WFS Géoplateforme IGN ────────────────────────────────
+   Requête asynchrone : renvoie la feature RPG sous le point projet (ou null).
+   Endpoint : data.geopf.fr/wfs/ows (accès libre, sans clé).
+   TypeName  : LANDUSE.AGRICULTURE2024 (ou 2023 selon disponibilité).
+   Résultat  : { code_cultu, libelle_groupe_culture, surf_ha } ou null.           */
+
+/**
+ * Interroge le WFS IGN Géoplateforme pour récupérer la parcelle RPG
+ * sous le point (lat, lng). Requête CQL_FILTER=INTERSECTS sur le point.
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {Promise<Object|null>} feature properties ou null
+ */
+function interrogerRPG(lat, lng) {
+  /* Buffer ~10m en degrés pour éviter les ratés sur les bords de parcelle */
+  var delta  = 0.0001;
+  var minX   = (lng - delta).toFixed(6);
+  var minY   = (lat - delta).toFixed(6);
+  var maxX   = (lng + delta).toFixed(6);
+  var maxY   = (lat + delta).toFixed(6);
+
+  /* Essai sur AGRICULTURE2024, fallback AGRICULTURE2023 si indisponible */
+  function fetchRPG(year) {
+    var url = 'https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0' +
+      '&REQUEST=GetFeature' +
+      '&TYPENAME=LANDUSE.AGRICULTURE' + year +
+      '&OUTPUTFORMAT=application%2Fjson' +
+      '&COUNT=1' +
+      '&BBOX=' + minX + ',' + minY + ',' + maxX + ',' + maxY + ',EPSG:4326';
+
+    return fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined })
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function(data) {
+        if (!data.features || data.features.length === 0) return null;
+        return data.features[0].properties;
+      });
+  }
+
+  return fetchRPG('2024').catch(function() {
+    return fetchRPG('2023');
+  }).catch(function(err) {
+    console.warn('[DDT90] WFS RPG indisponible :', err.message);
+    return null;
+  });
+}
+
+/**
+ * Enrichit A._rpgParcelle et déclenche l'injection RPG dans l'analyse.
+ * Appelé depuis lancerAnalyse() après détection des zones atlas.
+ * @param {Object|null} props — propriétés WFS de la parcelle RPG
+ */
+function appliquerRPG(props) {
+  A._rpgParcelle = props;
+  if (!props) return;
+
+  /* Clés WFS IGN selon le millésime (2023 ou 2024) */
+  var groupe  = props.libelle_groupe_culture || props.libel_group || '';
+  var code    = props.code_cultu  || props.code_culture  || '';
+  var surfHa  = parseFloat(props.surf_ha || props.contenance || 0);
+
+  /* Stocker les infos normalisées pour le rapport et les enjeux */
+  A._rpgParcelle._groupe  = groupe;
+  A._rpgParcelle._code    = code;
+  A._rpgParcelle._surfHa  = surfHa;
+
+  /* ── Enrichissement du bandeau enjeux ── */
+  var panel = document.getElementById('liste-enjeux');
+  var old   = document.getElementById('rpg-bandeau');
+  if (old) old.remove();
+
+  if (!panel) return;
+
+  var bandeau = document.createElement('div');
+  bandeau.id  = 'rpg-bandeau';
+  bandeau.className = 'rpg-bandeau';
+  bandeau.innerHTML =
+    '<span class="rpg-ico">🌾</span>' +
+    '<span class="rpg-main">Parcelle RPG détectée : ' +
+      '<strong>' + (groupe || code || 'Culture déclarée PAC') + '</strong>' +
+      (surfHa > 0 ? ' — ' + surfHa.toFixed(1) + ' ha' : '') +
+    '</span>' +
+    '<span class="rpg-note">Source : IGN Géoplateforme — LANDUSE.AGRICULTURE' +
+      (A._rpgAnnee || '2024') + '</span>';
+
+  /* Insérer avant le premier accordéon */
+  panel.insertBefore(bandeau, panel.firstChild);
+
+  /* ── Contacts spécifiques RPG ── */
+  injecterContactsRPG(groupe, code);
+
+  /* ── Checklist RPG ── */
+  injecterChecklistRPG(groupe, code);
+}
+
+
+/**
+ * Injecte les contacts RPG dans le panneau contacts si le projet
+ * est sur une parcelle agricole déclarée PAC.
+ */
+function injecterContactsRPG(groupe, code) {
+  var liste = document.getElementById('contacts-liste');
+  if (!liste) return;
+  var old = document.getElementById('rpg-contacts');
+  if (old) old.remove();
+
+  var estSensible = RPG_GROUPES_SENSIBLES.some(function(g) {
+    return groupe.toLowerCase().indexOf(g.toLowerCase()) >= 0;
+  });
+  if (!estSensible) return;
+
+  var div = document.createElement('div');
+  div.id  = 'rpg-contacts';
+
+  /* Toujours : Chambre d\'Agriculture si parcelle PAC sensible */
+  var contactsHtml = [
+    creerCarteContactRPG(
+      '🌾 Chambre d\'Agriculture du Territoire de Belfort',
+      'Avis CDPENAF — déclaration de consommation de SAU',
+      '03 84 57 83 83',
+      'contact@haute-saone.chambagri.fr',
+      'https://haute-saone.chambagri.fr',
+      'Obligatoire'
+    ),
+    creerCarteContactRPG(
+      '🏛 DDT 90 — Service Agriculture & Urbanisme',
+      'Instruction CDPENAF, déclaration PAC, conditionnalité BCAE',
+      '03 84 58 86 00',
+      'ddt-agriculture@territoire-de-belfort.gouv.fr',
+      'https://www.territoire-de-belfort.gouv.fr/DDT',
+      'Obligatoire'
+    ),
+  ];
+
+  contactsHtml.push(creerCarteContactRPG('&#x1F468;&#x200D;&#x1F33E; Agriculteur exploitant — '+(groupe||'Parcelle agricole'),'Exploitant RPG. Contacter pour négociation foncière. Coordonnées via Chambre d’Agriculture 90.','[À compléter]','[À compléter]','#','Obligatoire'));
+  /* Si prairies permanentes : Agence de l\'eau */
+  if (groupe.indexOf('Prair') >= 0 || groupe.indexOf('Estive') >= 0) {
+    contactsHtml.push(creerCarteContactRPG(
+      '💧 Agence de l\'eau Rhône Méditerranée Corse',
+      'Préservation prairies permanentes — MAEC humides',
+      '04 72 71 26 00',
+      'communication@eaurmc.fr',
+      'https://www.eaurmc.fr',
+      'Recommandé'
+    ));
+  }
+
+  div.innerHTML =
+    '<div class="contacts-section-titre rpg-contact-hdr">🌾 Contacts — Parcelle agricole RPG détectée</div>' +
+    contactsHtml.join('');
+
+  liste.insertBefore(div, liste.firstChild);
+}
+
+function creerCarteContactRPG(nom, role, tel, email, url, prio) {
+  var prioCls = prio === 'Obligatoire' ? 'prio-oblig' : 'prio-recom';
+  return '<div class="contact-card">' +
+    '<div class="cc-head"><span class="cc-nom">' + nom + '</span>' +
+    '<span class="prio-badge ' + prioCls + '">' + prio + '</span></div>' +
+    '<div class="cc-role">' + role + '</div>' +
+    '<div class="cc-links">' +
+      '<a href="tel:' + tel + '">' + tel + '</a>' +
+      '<a href="mailto:' + email + '">' + email + '</a>' +
+    '</div></div>';
+}
+
+/**
+ * Injecte des étapes checklist spécifiques à la parcelle RPG détectée.
+ */
+function injecterChecklistRPG(groupe, code) {
+  var body = document.getElementById('checklist-body');
+  if (!body) return;
+  var old = document.getElementById('rpg-checklist');
+  if (old) old.remove();
+
+  var estSensible = RPG_GROUPES_SENSIBLES.some(function(g) {
+    return groupe.toLowerCase().indexOf(g.toLowerCase()) >= 0;
+  });
+  if (!estSensible) return;
+
+  /* Étapes communes à toute consommation de parcelle PAC */
+  var etapes = [
+    { ico: '📋', label: 'Saisine CDPENAF obligatoire', desc: 'Avis de la Commission Départementale de Préservation des Espaces Naturels, Agricoles et Forestiers avant dépôt du permis.' },
+    { ico: '🌾', label: 'Déclaration de consommation de SAU', desc: 'Surface agricole utile consommée à déclarer à la DDT 90 — suivi ZAN et objectifs SRADDET.' },
+    { ico: '📊', label: 'Avis de la Chambre d\'Agriculture 90', desc: 'Consultation recommandée pour évaluer l\'impact sur l\'exploitation agricole concernée.' },
+    { ico: '💰', label: 'Évaluation compensation agricole', desc: 'Si surface > 5 ha : étude préalable agricole (EPA) et mesures compensatoires (art. L112-1-3 code rural).' },
+  ];
+
+  /* Étapes spécifiques selon le groupe de culture */
+  if (groupe.indexOf('Prair') >= 0) {
+    etapes.push({ ico: '🌿', label: 'Vérification prairie permanente interdite', desc: 'Les prairies permanentes déclarées PAC sont protégées — retournement interdit sauf dérogation préfectorale.' });
+  }
+  if (groupe.indexOf('Maïs') >= 0 || groupe.indexOf('Mas') >= 0 || groupe.indexOf('céréales') >= 0) {
+    etapes.push({ ico: '💧', label: 'Vérification zone nitrates', desc: 'Parcelle potentiellement en zone vulnérable nitrates — vérifier le programme d\'action applicable.' });
+  }
+  if (groupe.indexOf('Vignes') >= 0 || groupe.indexOf('AOP') >= 0) {
+    etapes.push({ ico: '🍷', label: 'Consultation syndicat AOP/AOC', desc: 'Parcelle potentiellement dans un périmètre d\'appellation — consulter le syndicat viticole.' });
+  }
+
+  var html = '<div id="rpg-checklist" class="checklist-rpg-bloc">' +
+    '<div class="chk-section-titre">🌾 Étapes spécifiques — Parcelle RPG (' + (groupe || code) + ')</div>' +
+    etapes.map(function(e, i) {
+      return '<div class="chk-item chk-item-rpg">' +
+        '<span class="chk-ico">' + e.ico + '</span>' +
+        '<div class="chk-content">' +
+          '<div class="chk-label">' + e.label + '</div>' +
+          '<div class="chk-desc">' + e.desc + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('') +
+  '</div>';
+
+  body.insertAdjacentHTML('afterbegin', html);
+}
+
+/* ── ZONES AGRICOLES — détection contextuelle (nitrates, régions, bio, SIQO)
+   Injecte enjeux, items checklist, contacts et modificateurs simulation.  */
+
+/**
+ * Détecte les zones agricoles contenant le point (lat, lng).
+ * Retourne un tableau de { type, nom, niv } pour les zones touchées.
+ */
+/**
+ * Détecte les zones agricoles contenant ou proches du point (lat, lng).
+ * - Polygones (nitrates, region_agri) : point-in-polygon strict.
+ * - Points (bio, siqo_aop, circuit_court, agroecologie) : proximité ≤ RAYON_KM km.
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {Array<{type, nom, cat}>}
+ */
+function detecterZonesAgricoles(lat, lng) {
+  var zones   = [];
+  var data    = COUCHES_DATA && COUCHES_DATA['agriculture'];
+  if (!data || !data.features) return zones;
+
+  /* Rayon de détection pour les features ponctuelles (km) */
+  var RAYON_KM = 5;
+
+  data.features.forEach(function(feature) {
+    var geom  = feature.geometry;
+    var props = feature.properties || {};
+    var type  = props.type || '';
+    var nom   = props.nom  || '';
+    if (!type || !geom) return;
+
+    var match = false;
+
+    if (geom.type === 'Polygon') {
+      var ring = geom.coordinates && geom.coordinates[0];
+      if (ring && ring.length) match = pointInPolygon(lat, lng, ring);
+    } else if (geom.type === 'MultiPolygon') {
+      match = geom.coordinates.some(function(poly) {
+        var ring = poly && poly[0];
+        return ring && ring.length && pointInPolygon(lat, lng, ring);
+      });
+    } else if (geom.type === 'Point') {
+      /* Détection par proximité pour les marqueurs ponctuels */
+      var fLng = geom.coordinates[0];
+      var fLat = geom.coordinates[1];
+      var dist = distanceKm(lat, lng, fLat, fLng);
+      match = dist <= RAYON_KM;
+    }
+
+    if (match) {
+      /* Éviter les doublons de même type */
+      var existe = zones.some(function(z) { return z.type === type; });
+      if (!existe) {
+        zones.push({ type: type, nom: nom, cat: props.cat || '' });
+      }
+    }
+  });
+
+  return zones;
+}
+
+/**
+ * Génère des enjeux contextuels supplémentaires selon les zones agricoles détectées.
+ * Filtrés par typeProjet : CDPENAF pour tous, nitrates pour agri/zae/logement, etc.
+ * @param {Array} zonesAgri — résultat de detecterZonesAgricoles()
+ * @param {number} taille   — envergure projet (1–4)
+ * @param {string} typeProjet — type de projet courant
+ */
+function genererEnjeuxAgricoles(zonesAgri, taille, typeProjet) {
+  var enjeux = [];
+  var types  = zonesAgri.map(function(z) { return z.type; });
+
+  var isAgri   = typeProjet === 'agriculture';
+  var isZae    = typeProjet === 'zae';
+  var isLog    = typeProjet === 'logement';
+  var isFriche = typeProjet === 'friche';
+  var isNature = typeProjet === 'nature';
+
+  var inNitrates  = types.indexOf('nitrates')      >= 0;
+  var inRegion    = types.indexOf('region_agri')   >= 0;
+  var inBio       = types.indexOf('bio')           >= 0;
+  var inSiqo      = types.indexOf('siqo_aop')      >= 0;
+  var inCircuit   = types.indexOf('circuit_court') >= 0;
+  var inAgroeco   = types.indexOf('agroecologie')  >= 0;
+
+  /* Nitrates : pertinent pour agri (épandage), zae (industries agro-alimentaires), logement (eau potable) */
+  if (inNitrates && (isAgri || isZae || isLog)) {
+    enjeux.push({
+      id:    'agri-ctx-nitrates',
+      nom:   'Zone vuln\u00e9rable nitrates \u2014 Programme d\u2019action applicable',
+      ico:   '\uD83E\uDDEA',
+      niv:   'eleve',
+      tmin:  1,
+      contexte_zone: true,
+      axes:  { environnement: { facteurs: ['Zone vuln\u00e9rable nitrates (bassin Allan ou Bourbeuse)'], consequences: ['Restrictions d\u2019\u00e9pandage et stockage d\u2019effluents 6 mois minimum'] } },
+      actions: [
+        '5e Programme d\u2019Actions Nitrates : p\u00e9riodes d\u2019\u00e9pandage et doses \u00e0 respecter',
+        'Pr\u00e9voir un stockage d\u2019effluents de 6 mois minimum',
+        'Contacter la Chambre d\u2019Agriculture 90 pour le plan de fumure',
+        'Adh\u00e9rer \u00e0 l\u2019initiative L\u2019Eau d\u2019Ici (CCST)',
+      ],
+      refs: [{ n: 'C40', t: 'Zones vuln\u00e9rables nitrates' }],
+      _agri_ctx: true,
+    });
+  }
+
+  /* CDPENAF : s'applique à TOUS les projets consommant de la SAU */
+  if (inRegion) {
+    var nomRegion = (zonesAgri.find(function(z){ return z.type === 'region_agri'; }) || {}).nom || 'R\u00e9gion agricole';
+    enjeux.push({
+      id:    'agri-ctx-cdpenaf',
+      nom:   'Consommation fonci\u00e8re agricole \u2014 CDPENAF obligatoire',
+      ico:   '\uD83C\uDF3E',
+      niv:   'eleve',
+      tmin:  1,
+      contexte_zone: true,
+      axes:  { economique: { facteurs: ['Projet situ\u00e9 dans une r\u00e9gion agricole (' + nomRegion.split('(')[0].trim() + ')'], consequences: ['Avis de la CDPENAF obligatoire si le projet consomme de la SAU'] } },
+      actions: [
+        'Solliciter l\u2019avis de la CDPENAF aupr\u00e8s de la DDT 90 avant tout d\u00e9p\u00f4t',
+        'Justifier l\u2019absence d\u2019alternative sur terrain non agricole (ZAN)',
+        'Contacter la Chambre d\u2019Agriculture 90 pour un avis pr\u00e9alable',
+        'Estimer la SAU consomm\u00e9e et pr\u00e9voir une compensation si n\u00e9cessaire',
+      ],
+      refs: [{ n: 'C28', t: 'R\u00e9gions agricoles' }, { n: 'C34', t: 'CDPENAF' }],
+      _agri_ctx: true,
+    });
+  }
+
+  /* Bio/agroécologie : pertinent seulement pour les projets agricoles */
+  if ((inBio || inAgroeco) && isAgri) {
+    enjeux.push({
+      id:    'agri-ctx-bio',
+      nom:   'Zone bio/agro\u00e9cologie \u2014 Compatibilit\u00e9 et valorisation',
+      ico:   '\uD83C\uDF3F',
+      niv:   'moyen',
+      tmin:  1,
+      contexte_zone: true,
+      axes:  { environnement: { facteurs: ['Secteur \u00e0 enjeu agro-\u00e9cologique identifi\u00e9'], consequences: ['Pr\u00e9server la coh\u00e9rence avec les pratiques bio et agro\u00e9cologiques du secteur'] } },
+      actions: [
+        'V\u00e9rifier la compatibilit\u00e9 du projet avec les exploitations bio voisines',
+        'Contacter le GAB Franche-Comt\u00e9 pour les projets en agriculture biologique',
+        'D\u00e9poser une demande MAEC conversion AB avant le 15 mai (DDT 90)',
+      ],
+      refs: [{ n: 'C37', t: 'Agriculture biologique' }],
+      _agri_ctx: true,
+    });
+  }
+
+  /* SIQO/AOP : concerne la production (agri) et la transformation/commercialisation (zae) */
+  if (inSiqo && (isAgri || isZae)) {
+    enjeux.push({
+      id:    'agri-ctx-siqo',
+      nom:   'Zone SIQO / AOP \u2014 Respect du cahier des charges',
+      ico:   '\uD83C\uDFF7',
+      niv:   'moyen',
+      tmin:  1,
+      contexte_zone: true,
+      axes:  { economique: { facteurs: ['Secteur couvert par un Signe d\u2019Identification de la Qualit\u00e9 et de l\u2019Origine (AOP, IGP...)'], consequences: ['Le projet ne doit pas compromettre les conditions de l\u2019appellation'] } },
+      actions: [
+        'V\u00e9rifier la compatibilit\u00e9 du projet avec le cahier des charges de l\u2019AOP/IGP',
+        'Contacter l\u2019INAO (Institut National de l\u2019Origine et de la Qualit\u00e9)',
+      ],
+      refs: [{ n: 'C36', t: 'Labels et signes de qualit\u00e9' }],
+      _agri_ctx: true,
+    });
+  }
+
+  return enjeux;
+}
+
+/**
+ * Génère des items de checklist supplémentaires selon les zones agricoles.
+ * Appelé par afficherChecklist() si A.typeProjet === 'agriculture'.
+ */
+function checklistAgricoleContextuelle(zonesAgri) {
+  var items = [];
+  var types = zonesAgri.map(function(z) { return z.type; });
+
+  if (types.indexOf('nitrates') >= 0) {
+    items.push(
+      { id:'agri-check-nitrates-1', ico:'\uD83E\uDDEA', label:'Plan de fumure pr\u00e9visionnel', oblig:true,  delai:'Avant d\u00e9marrage', desc:'Plan de fumure obligatoire en zone vuln\u00e9rable nitrates. Pr\u00e9parer avec la Chambre d\u2019Agriculture 90.' },
+      { id:'agri-check-nitrates-2', ico:'\uD83D\uDDC3',  label:'Capacit\u00e9 de stockage effluents 6 mois', oblig:true, delai:'Avant mise en service', desc:'V\u00e9rifier que la capacit\u00e9 de stockage respecte les 6 mois r\u00e9glementaires en zone vuln\u00e9rable.' },
+      { id:'agri-check-nitrates-3', ico:'\uD83D\uDCC5', label:'Calendrier d\u2019\u00e9pandage (p\u00e9riodes interdites)', oblig:true, delai:'En continu', desc:'Respecter les fen\u00eatres d\u2019\u00e9pandage de l\u2019arr\u00eat\u00e9 pr\u00e9fectoral du 90.' }
+    );
+  }
+
+  if (types.indexOf('region_agri') >= 0) {
+    items.push(
+      { id:'agri-check-cdpenaf', ico:'\uD83C\uDF3E', label:'Saisine CDPENAF', oblig:true, delai:'Avant PC', desc:'Avis de la Commission D\u00e9partementale de Pr\u00e9servation des Espaces Naturels, Agricoles et Forestiers obligatoire si consommation de SAU.' },
+      { id:'agri-check-chambre', ico:'\uD83D\uDCDE', label:'Avis Chambre d\u2019Agriculture 90', oblig:false, delai:'Avant d\u00e9p\u00f4t', desc:'Consulter la Chambre d\u2019Agriculture 90 avant tout projet impactant la SAU du d\u00e9partement.' }
+    );
+  }
+
+  return items;
+}
+
+/**
+ * Calcule les modificateurs de simulation agricole selon les zones détectées.
+ * Retourne { dureeDelta, complexDelta, impactDelta, alertes }.
+ */
+function modificateursSimulationAgricole(zonesAgri) {
+  var dureeDelta   = 0;
+  var complexDelta = 0;
+  var impactDelta  = 0;
+  var alertes      = [];
+  var types = zonesAgri.map(function(z) { return z.type; });
+
+  if (types.indexOf('nitrates') >= 0) {
+    dureeDelta   += 2;
+    complexDelta += 12;
+    impactDelta  += 8;
+    alertes.push({ cls:'rouge', ico:'\uD83E\uDDEA', txt:'Zone vuln\u00e9rable nitrates : programme d\u2019action renforc\u00e9, plan de fumure obligatoire, stockage 6 mois minimum.' });
+  }
+
+  if (types.indexOf('region_agri') >= 0) {
+    dureeDelta   += 3;
+    complexDelta += 15;
+    alertes.push({ cls:'orange', ico:'\uD83C\uDF3E', txt:'R\u00e9gion agricole identifi\u00e9e : saisine CDPENAF obligatoire, d\u00e9lai d\u2019instruction major\u00e9 de 2 \u00e0 4 mois.' });
+  }
+
+  if (types.indexOf('bio') >= 0 || types.indexOf('agroecologie') >= 0) {
+    complexDelta += 8;
+    impactDelta  -= 10;  /* impact positif si projet compatible bio */
+    alertes.push({ cls:'bleu', ico:'\uD83C\uDF3F', txt:'Secteur agro\u00e9cologique : possibilit\u00e9 de MAEC, valorisation bio \u2014 impact environnemental r\u00e9duit.' });
+  }
+
+  if (types.indexOf('siqo_aop') >= 0) {
+    dureeDelta   += 2;
+    complexDelta += 10;
+    alertes.push({ cls:'orange', ico:'\uD83C\uDFF7', txt:'Zone AOP/IGP : v\u00e9rifier la compatibilit\u00e9 du projet avec le cahier des charges de l\u2019appellation.' });
+  }
+
+  if (types.indexOf('circuit_court') >= 0) {
+    impactDelta -= 5;   /* impact positif : projet de proximité */
+    alertes.push({ cls:'bleu', ico:'\uD83E\uDD55', txt:'Secteur circuits courts : valorisation \u00e9conomique locale possible, impact positif sur la fili\u00e8re.' });
+  }
+
+  return { dureeDelta: dureeDelta, complexDelta: complexDelta, impactDelta: impactDelta, alertes: alertes };
+}
+
 function detecterZones(lat, lng, typeProjet) {
   if (!lat || !lng || !ENJEUX_ZONES || ENJEUX_ZONES.length === 0) return [];
 
@@ -4502,7 +4391,7 @@ function rendreAccordeonZones(zonesDetectees, conteneur) {
   if (!zonesDetectees || zonesDetectees.length === 0) return;
 
   var accord = document.createElement('div');
-  accord.className = 'accord-wrap accord-zones ouvert';
+  accord.className = 'accord-wrap accord-zones';
   accord.dataset.axe = 'zones';
 
   var niveaux = { eleve:'Elevé', moyen:'Moyen', faible:'Faible' };
@@ -4640,4 +4529,482 @@ function rendreAccordeonZones(zonesDetectees, conteneur) {
   }
 }
 
-/* Zones injection moved into lancerAnalyse */
+
+/* ── RAPPORT PDF — fenêtre HTML imprimable (7 pages)
+   Couverture · Enjeux · Alentours · Checklist · Simulation · Contacts · Radar
+   Métriques : A._lastFiltres / A._lastZonesResultats / A._sim          */
+
+function lancerRapport() {
+  if (!A._lastFiltres) {
+    alert("Lancez d'abord une analyse pour generer le rapport.");
+    return;
+  }
+  genererRapportPDF(A._lastFiltres, A._lastZonesResultats);
+}
+
+function genererRapportPDF(filtres, zonesResultats) {
+  var type     = TYPES.find(function(x){ return x.id === A.typeProjet; });
+  var taille   = TAILLES[A.taille];
+  var sousType = A.sousType || null;
+  var stObj    = sousType && SOUS_TYPES[A.typeProjet]
+                   ? SOUS_TYPES[A.typeProjet].find(function(s){ return s.id === sousType; })
+                   : null;
+  var commune  = detecterCommuneProjet();
+  var dateStr  = new Date().toLocaleDateString('fr-FR',{day:'2-digit',month:'long',year:'numeric'});
+  var epci     = commune && commune.codeEpci ? getEpciInfo(commune.codeEpci) : null;
+  var contacts = genererContactsData();
+
+  var alentourItems = [];
+  if (typeof alentours !== 'undefined' && alentours.resultats && alentours.resultats.length) {
+    alentourItems = alentours.resultats.slice(0, 10);
+  }
+
+  var checkItems = [];
+  if (A.sousType && CHECKLISTS[A.sousType]) { checkItems = CHECKLISTS[A.sousType]; }
+  else if (A.typeProjet && CHECKLISTS[A.typeProjet]) { checkItems = CHECKLISTS[A.typeProjet]; }
+
+  /* ── Simulation : lire A._sim si disponible, sinon fallback DOM ── */
+  var sim = A._sim || null;
+  var simDureeStr   = sim ? sim.dureeStr     : '—';
+  var simDuree      = sim ? sim.duree        : 0;
+  var simComplex    = sim ? sim.complex      : 0;
+  var simComplexLbl = sim ? sim.complexLabel : '—';
+  var simImpact     = sim ? sim.impact       : 0;
+  var simImpactPos  = sim ? sim.impactPos    : false;
+  var simImpactLbl  = sim ? sim.impactLabel  : '—';
+
+  /* Si pas de simulation lancee, fallback sur le DOM */
+  if (!sim) {
+    var simEl = document.getElementById('sim-result');
+    if (simEl) {
+      var dEl = simEl.querySelector('.sim-jauge-valeur');
+      if (dEl) simDureeStr = dEl.textContent.trim().split(' ')[0] || '—';
+    }
+  }
+
+  /* ── Calcul du score global et des 4 axes du radar ─────────────
+     Tous les scores sont ramenés sur /5 :
+     - Economique  : complexite / 100 * 5  (complexite elevee = score eleve)
+     - Environnemental : impact / 100 * 5 (plus l\'impact est fort, plus le score est eleve)
+     - Societal    : base sur le nb d'enjeux sociaux / eleves
+     - Politique   : base sur nb de zones detectees + complexite procedure
+     Score global  : moyenne des 4 axes, arrondie a 0.5 pres
+  ─────────────────────────────────────────────────────────────── */
+  var axeEco  = simComplex > 0 ? +(simComplex / 100 * 5).toFixed(2) : 2.5;
+  var axeEnv  = simImpact  > 0 ? +(simImpact  / 100 * 5).toFixed(2) : 2.5;
+
+  /* Societal : nb enjeux niv eleve / total filtres, ramene sur 5 */
+  var nbEleve    = filtres.filter(function(e){ return e.niv === 'eleve'; }).length;
+  var nbTotal    = filtres.length || 1;
+  var axeSoc     = +(Math.min(5, 1 + (nbEleve / nbTotal) * 4)).toFixed(2);
+
+  /* Politique : nb zones + taille projet, ramene sur 5 */
+  var nbZones    = zonesResultats.length;
+  var axePol     = +(Math.min(5, 1 + (nbZones * 0.4) + (A.taille * 0.5))).toFixed(2);
+
+  /* Score global = moyenne ponderee arrondie a 0.5 */
+  var scoreBrut  = (axeEco + axeEnv + axeSoc + axePol) / 4;
+  var scoreGlobal = Math.round(scoreBrut * 2) / 2;  /* arrondi a 0.5 */
+  var scoreStr   = scoreGlobal.toFixed(1) + '/5';
+
+  /* Couleur du score global */
+  var scoreCouleur = scoreGlobal <= 2 ? '#16a34a' : scoreGlobal <= 3.5 ? '#d97706' : '#dc2626';
+
+  /* ── Radar SVG inline avec vraies valeurs ─────────────────────── */
+  function radarSVG(vals, labels) {
+    var cx = 160, cy = 160, r = 110, n = labels.length, MAX = 5;
+    var angle = function(i) { return (i * 2 * Math.PI / n) - Math.PI / 2; };
+    var pt    = function(v, i) {
+      return [(cx + (v/MAX)*r*Math.cos(angle(i))).toFixed(1),
+              (cy + (v/MAX)*r*Math.sin(angle(i))).toFixed(1)];
+    };
+    var rings = '';
+    [1,2,3,4,5].forEach(function(g) {
+      var gpts = labels.map(function(_,i){ return pt(g,i).join(','); }).join(' ');
+      rings += '<polygon points="'+gpts+'" fill="none" stroke="#cbd5e1" stroke-width="0.8"/>';
+    });
+    var axes = labels.map(function(_,i) {
+      return '<line x1="'+cx+'" y1="'+cy+'" x2="'+pt(5,i)[0]+'" y2="'+pt(5,i)[1]+'" stroke="#e2e8f0" stroke-width="1"/>';
+    }).join('');
+    var datapts = vals.map(function(v,i){ return pt(v,i); });
+    var poly = '<polygon points="'+datapts.map(function(p){return p.join(',');}).join(' ')+'" fill="#93c5fd" fill-opacity="0.45" stroke="#3b82f6" stroke-width="2.5"/>';
+    var dots = datapts.map(function(p){
+      return '<circle cx="'+p[0]+'" cy="'+p[1]+'" r="5" fill="#2563eb" stroke="#fff" stroke-width="1.5"/>';
+    }).join('');
+    /* Valeur numerique sur chaque point */
+    var valLabels = vals.map(function(v,i) {
+      var p = pt(v + 0.55, i);
+      return '<text x="'+p[0]+'" y="'+(+p[1]+4).toFixed(1)+'" text-anchor="middle" font-size="9" font-weight="700" fill="#2563eb">'+v.toFixed(1)+'</text>';
+    }).join('');
+    var axeLabels = labels.map(function(lbl,i) {
+      var lx = cx + (r+26)*Math.cos(angle(i));
+      var ly = cy + (r+26)*Math.sin(angle(i));
+      var anc = Math.cos(angle(i)) > 0.2 ? 'start' : Math.cos(angle(i)) < -0.2 ? 'end' : 'middle';
+      return '<text x="'+lx.toFixed(1)+'" y="'+(ly+4).toFixed(1)+'" text-anchor="'+anc+'" font-size="11" font-weight="600" fill="#334155">'+lbl+'</text>';
+    }).join('');
+    return '<svg width="320" height="320" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:0 auto;">'+rings+axes+poly+dots+valLabels+axeLabels+'</svg>';
+  }
+
+  var radarVals   = [axeEco, axeEnv, axeSoc, axePol];
+  var radarLabels = ['Economique','Environnemental','Societal','Politique'];
+  var radarHtml   = radarSVG(radarVals, radarLabels);
+
+  /* Barres de progression pour le radar (legende) */
+  function barreAxe(label, val, color) {
+    var pct = (val/5*100).toFixed(0);
+    return '<div style="margin-bottom:7px;">' +
+      '<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px;">' +
+        '<span style="font-weight:600;color:#1e293b;">'+label+'</span>' +
+        '<span style="font-weight:700;color:'+color+';">'+val.toFixed(1)+'/5</span>' +
+      '</div>' +
+      '<div style="height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;">' +
+        '<div style="height:100%;width:'+pct+'%;background:'+color+';border-radius:3px;transition:width .3s;"></div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  var axeColors = { Economique:'#7c3aed', Environnemental:'#15803d', Societal:'#be123c', Politique:'#92400e' };
+
+  /* ── Helpers HTML partagés ───────────────────────────────────── */
+  function nivBadge(niv) {
+    var m = {eleve:{l:'ELEVE',c:'#dc2626'},moyen:{l:'MOYEN',c:'#d97706'},faible:{l:'FAIBLE',c:'#16a34a'}};
+    var n = m[niv]||{l:niv,c:'#64748b'};
+    return '<span style="background:'+n.c+';color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.04em;">'+n.l+'</span>';
+  }
+  function nivBg(niv)   { return {eleve:'#fef2f2',moyen:'#fffbeb',faible:'#f0fdf4'}[niv]||'#f8fafc'; }
+  function nivBord(niv) { return {eleve:'#fca5a5',moyen:'#fde68a',faible:'#86efac'}[niv]||'#e2e8f0'; }
+
+  function zoneRow(z) {
+    var nom=z.nom||(z.enjeu&&z.enjeu.nom)||'', ref=z.ref||(z.enjeu&&z.enjeu.id)||'', ico=z.ico||(z.enjeu&&z.enjeu.ico)||'!';
+    return '<tr style="background:'+nivBg(z.niv)+';border-bottom:1px solid #f1f5f9;">'+
+      '<td style="padding:7px 10px;font-size:15px;width:30px;">'+ico+'</td>'+
+      '<td style="padding:7px 10px 7px 0;"><div style="font-weight:600;font-size:11px;color:#1e293b;">'+nom+'</div><div style="font-size:10px;color:#64748b;margin-top:2px;">'+ref+'</div></td>'+
+      '<td style="padding:7px 10px;text-align:right;width:70px;">'+nivBadge(z.niv)+'</td></tr>';
+  }
+
+  function enjeuRow(e) {
+    return '<tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'+
+      '<td style="padding:7px 10px;font-size:15px;width:30px;">'+(e.ico||'!')+'</td>'+
+      '<td style="padding:7px 10px 7px 0;"><div style="font-weight:600;font-size:11px;color:#1e293b;">'+e.nom+'</div><div style="font-size:10px;color:#64748b;margin-top:2px;">'+(e.actions&&e.actions[0]?'-> '+e.actions[0]:'')+'</div></td>'+
+      '<td style="padding:7px 10px;text-align:right;width:90px;">'+nivBadge(e.niv)+'</td></tr>';
+  }
+
+  function checkRow(item) {
+    return '<tr style="border-bottom:1px solid #f1f5f9;">'+
+      '<td style="padding:6px 8px;width:24px;text-align:center;"><span style="display:inline-block;width:16px;height:16px;border:1.5px solid #cbd5e1;border-radius:3px;"></span></td>'+
+      '<td style="padding:6px 8px 6px 0;"><span style="font-size:13px;margin-right:4px;">'+(item.ico||'o')+'</span><span style="font-weight:600;font-size:11px;color:#1e293b;">'+item.label+'</span>'+(item.desc?'<div style="font-size:10px;color:#64748b;margin-top:2px;">'+item.desc+'</div>':'')+'</td>'+
+      '<td style="padding:6px 8px;text-align:right;font-size:10px;color:#94a3b8;width:90px;">'+(item.delai||'')+'</td>'+
+      '<td style="padding:6px 8px;width:80px;">'+(item.oblig?'<span style="font-size:9px;font-weight:700;color:#dc2626;">OBLIGATOIRE</span>':'')+'</td></tr>';
+  }
+
+  function contactCard(c) {
+    var isOblig=((c.priorite||'').toLowerCase().indexOf('oblig')!==-1);
+    var isRecomm=((c.priorite||'').toLowerCase().indexOf('recom')!==-1);
+    var badgeBg=isOblig?'#fef2f2':(isRecomm?'#eff6ff':'#f8fafc');
+    var badgeFg=isOblig?'#dc2626':(isRecomm?'#003395':'#64748b');
+    var bordCol=isOblig?'#fca5a5':(isRecomm?'#bfdbfe':'#e2e8f0');
+    var hasTel=(c.tel&&c.tel!==''&&!c.tel.startsWith('['));
+    var hasEmail=(c.email&&c.email!==''&&!c.email.startsWith('['));
+    var telHtml=hasTel?
+      '<div style="display:flex;align-items:center;gap:8px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:7px 10px;">'+
+        '<span style="font-size:16px;flex-shrink:0;">&#x1F4DE;</span>'+
+        '<div><div style="font-size:8px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:.04em;margin-bottom:1px;">Telephone</div>'+
+        '<div style="font-size:11px;font-weight:700;color:#1e293b;">'+c.tel+'</div></div></div>':'';
+    var emailHtml=hasEmail?
+      '<div style="display:flex;align-items:center;gap:8px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:7px 10px;">'+
+        '<span style="font-size:16px;flex-shrink:0;">&#x2709;</span>'+
+        '<div><div style="font-size:8px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:.04em;margin-bottom:1px;">Email</div>'+
+        '<div style="font-size:10px;font-weight:600;color:#1e293b;word-break:break-all;">'+c.email+'</div></div></div>':'';
+    var coordGrid=(telHtml||emailHtml)?
+      '<div style="display:grid;grid-template-columns:'+(hasTel&&hasEmail?'1fr 1fr':'1fr')+';gap:6px;margin-top:8px;">'+telHtml+emailHtml+'</div>':
+      '<div style="font-size:10px;color:#94a3b8;margin-top:6px;font-style:italic;">Coordonnees non disponibles</div>';
+    return '<div style="background:#fff;border:1.5px solid '+bordCol+';border-radius:10px;padding:14px 16px;page-break-inside:avoid;box-shadow:0 1px 4px rgba(0,0,0,.06);">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px;">'+
+        '<div style="font-weight:700;font-size:11.5px;color:#003395;line-height:1.35;flex:1;">'+c.nom+'</div>'+
+        (c.priorite?'<span style="flex-shrink:0;font-size:9px;font-weight:700;color:'+badgeFg+';background:'+badgeBg+';border:1px solid '+bordCol+';border-radius:5px;padding:2px 7px;white-space:nowrap;">'+c.priorite+'</span>':'')+
+      '</div>'+
+      '<div style="font-size:10px;color:#475569;line-height:1.45;">'+(c.role||'')+'</div>'+
+      coordGrid+
+      (c.note?'<div style="margin-top:8px;font-size:9.5px;color:#64748b;background:#f8fafc;border-left:3px solid #cbd5e1;border-radius:0 4px 4px 0;padding:5px 8px;line-height:1.45;">i '+c.note+'</div>':'')+
+    '</div>';
+  }
+
+  /* Regrouper enjeux */
+  var enjeuxEleve  = filtres.filter(function(e){ return e.niv==='eleve'; });
+  var enjeuxMoyen  = filtres.filter(function(e){ return e.niv==='moyen'; });
+  var enjeuxFaible = filtres.filter(function(e){ return e.niv==='faible'; });
+
+  /* Raccourcis */
+  var typeLabel =type?type.label:'';
+  var typeIco   =type?type.ico:'';
+  var stLabel   =stObj?stObj.label:'';
+  var tailleNom =taille?taille.nom:'';
+  var supHa     =A.superficieHa?A.superficieHa.toFixed(2)+' ha':'';
+  var communeNom=commune?commune.nom:'';
+  var communeCp =commune?(commune.cp||'90'):'';
+  var posLat    =A.position?'Lat '+A.position.lat.toFixed(3):'';
+  var posLng    =A.position?', Lng '+A.position.lng.toFixed(3):'';
+  var epciAcro  =epci?epci.acronyme:'';
+  var epciNom   =epci?epci.nom:'';
+
+  /* Couleur barres simulation */
+  var complexColor = simComplex < 50 ? '#16a34a' : simComplex < 70 ? '#d97706' : '#dc2626';
+  var impactColor  = simImpactPos ? '#16a34a' : (simImpact < 55 ? '#d97706' : '#dc2626');
+  var dureeColor   = simDuree < 12 ? '#16a34a' : simDuree < 36 ? '#d97706' : '#dc2626';
+
+  /* ────────────────── HTML DU RAPPORT ─────────────────────────── */
+  var html =
+    '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"/>'+
+    '<title>Rapport DDT 90 -- '+typeLabel+' -- '+dateStr+'</title>'+
+    '<style>'+
+      '* { box-sizing:border-box; margin:0; padding:0; }'+
+      'body { font-family:Arial,Helvetica,sans-serif; font-size:11px; color:#1e293b; background:#fff; }'+
+      '@page { size:A4; margin:18mm 16mm 14mm; }'+
+      '@media print { .no-print{display:none!important;} .page-break{page-break-before:always;break-before:page;} .avoid-break{page-break-inside:avoid;break-inside:avoid;} }'+
+      '.hdr{background:#003395;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;}'+
+      '.tricolore{display:flex;height:3px;margin-bottom:8px;}'+
+      '.tricolore span:nth-child(1){flex:1;background:#002266;}'+
+      '.tricolore span:nth-child(2){flex:1;background:#fff;}'+
+      '.tricolore span:nth-child(3){flex:1;background:#dc2626;}'+
+      '.sec{font-size:14px;font-weight:700;color:#003395;border-bottom:2px solid #003395;padding-bottom:5px;margin:16px 0 10px;}'+
+      '.ssec{font-size:11px;font-weight:700;color:#1e293b;margin:10px 0 6px;}'+
+      'table{width:100%;border-collapse:collapse;}'+
+      '.panel{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;}'+
+      '.ptitle{font-weight:700;font-size:10px;color:#003395;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}'+
+      '.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px;}'+
+      '.prog{height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin:4px 0 5px;}'+
+      '.prog-fill{height:100%;border-radius:4px;}'+
+      '.btn-print{background:#003395;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:16px;}'+
+      '.footer{margin-top:16px;padding-top:8px;border-top:1px solid #e2e8f0;font-size:9px;color:#94a3b8;text-align:center;}'+
+      '.jauge-val{font-size:15px;font-weight:900;text-align:right;}'+
+      '.jauge-sous{font-size:9px;color:#64748b;margin-top:3px;}'+
+    '</style></head><body>'+
+
+    '<div class="no-print" style="text-align:center;padding:16px 0 8px;">'+
+      '<button class="btn-print" onclick="window.print()">Imprimer / Enregistrer en PDF</button>'+
+      '<div style="font-size:10px;color:#64748b;margin-top:4px;">Choisir "Enregistrer en PDF" dans la boite de dialogue</div>'+
+    '</div>'+
+
+    /* ═══ PAGE 1 — COUVERTURE ═══ */
+    '<div class="tricolore"><span></span><span></span><span></span></div>'+
+    '<div class="hdr"><div><div style="font-weight:700;font-size:13px;">DDT 90 -- Compte Rendu d\'analyse de projet</div><div style="font-size:9px;opacity:.8;">Direction Departementale des Territoires -- Territoire de Belfort</div></div><div style="font-size:9px;opacity:.7;">'+dateStr+'</div></div>'+
+
+    '<div style="padding:12px 0 0;">'+
+      '<div style="text-align:center;margin-bottom:14px;">'+
+        '<div style="font-size:22px;font-weight:900;color:#1e293b;margin-bottom:4px;">Compte Rendu</div>'+
+        '<div style="font-size:13px;color:#003395;font-weight:600;">'+typeIco+' '+typeLabel+(stLabel?' > '+stLabel:'')+'</div>'+
+        (communeNom?'<div style="font-size:11px;color:#64748b;margin-top:2px;">Commune de '+communeNom+' ('+communeCp+')</div>':'')+
+      '</div>'+
+
+      /* Tableau 3 colonnes */
+      '<div style="display:grid;grid-template-columns:2fr 1.2fr 1fr;gap:0;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:14px;">'+
+        '<div style="background:#d1fae5;padding:10px 12px;"><div style="font-size:9px;font-weight:700;color:#064e3b;text-transform:uppercase;margin-bottom:4px;">Objectif du projet</div><div style="font-size:10px;color:#1e293b;">Construction / implantation de '+typeLabel.toLowerCase()+(communeNom?' dans la commune de '+communeNom:'')+'</div></div>'+
+        '<div style="background:#fef9c3;padding:10px 12px;border-left:1px solid #e2e8f0;"><div style="font-size:9px;font-weight:700;color:#713f12;text-transform:uppercase;margin-bottom:4px;">Initiateur</div><div style="font-size:10px;color:#1e293b;">'+(communeNom?'Commune de '+communeNom:'Porteur de projet')+'</div><div style="font-size:9px;color:#64748b;">'+epciAcro+'</div></div>'+
+        '<div style="background:#fecaca;padding:10px 12px;border-left:1px solid #e2e8f0;text-align:center;"><div style="font-size:9px;font-weight:700;color:#7f1d1d;text-transform:uppercase;margin-bottom:4px;">Note globale</div>'+
+          '<div style="font-size:26px;font-weight:900;color:'+scoreCouleur+';line-height:1;">'+scoreGlobal.toFixed(1)+'<span style="font-size:16px;">/5</span></div>'+
+        '</div>'+
+      '</div>'+
+
+      /* Grille meta */
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:14px;">'+
+        '<div style="background:#fff;border-radius:6px;padding:8px 10px;border:1px solid #e2e8f0;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:3px;">Type</div><div style="font-weight:700;font-size:11px;">'+typeIco+' '+typeLabel+'</div><div style="font-size:9px;color:#94a3b8;">'+stLabel+'</div></div>'+
+        '<div style="background:#fff;border-radius:6px;padding:8px 10px;border:1px solid #e2e8f0;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:3px;">Envergure</div><div style="font-weight:700;font-size:11px;">'+tailleNom+'</div></div>'+
+        '<div style="background:#fff;border-radius:6px;padding:8px 10px;border:1px solid #e2e8f0;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:3px;">Superficie</div><div style="font-weight:700;font-size:11px;">'+supHa+'</div></div>'+
+        '<div style="background:#fff;border-radius:6px;padding:8px 10px;border:1px solid #e2e8f0;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:3px;">Localisation</div><div style="font-weight:700;font-size:11px;">'+(communeNom||'Definie')+'</div><div style="font-size:9px;color:#94a3b8;">'+posLat+'</div></div>'+
+        (epciNom?'<div style="background:#fff;border-radius:6px;padding:8px 10px;border:1px solid #e2e8f0;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:3px;">EPCI</div><div style="font-weight:700;font-size:11px;">'+epciAcro+'</div></div>':'')+
+        '<div style="background:#fff;border-radius:6px;padding:8px 10px;border:1px solid #e2e8f0;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:3px;">Enjeux</div><div style="font-weight:700;font-size:11px;color:#dc2626;">'+filtres.length+'</div></div>'+
+        '<div style="background:#fff;border-radius:6px;padding:8px 10px;border:1px solid #e2e8f0;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:3px;">Zones sensibles</div><div style="font-weight:700;font-size:11px;color:#d97706;">'+zonesResultats.length+'</div></div>'+
+      '</div>'+
+    '</div>'+
+
+    /* ═══ PAGE 2 — ENJEUX ═══ */
+    '<div class="page-break"></div>'+
+    '<div class="sec">Quels sont les principaux enjeux de votre projet ?</div>'+
+    (zonesResultats.length>0?
+      '<div class="avoid-break"><div class="panel"><div class="ptitle"><span>Contraintes de localisation -- '+zonesResultats.length+' zones detectees</span></div>'+
+      '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:8px 10px;margin-bottom:6px;font-size:10px;color:#7f1d1d;">La position de votre projet a ete analysee. '+zonesResultats.length+' contrainte(s) detectees.</div>'+
+      '<table><tbody>'+zonesResultats.map(zoneRow).join('')+'</tbody></table></div></div>':'')+
+    '<div class="ssec">Enjeux -- '+typeLabel+' : '+filtres.length+' enjeu(x)</div>'+
+    (enjeuxEleve.length?'<div class="avoid-break"><div style="font-size:10px;font-weight:700;color:#dc2626;margin:8px 0 4px;">ELEVE ('+enjeuxEleve.length+')</div><table><tbody>'+enjeuxEleve.map(enjeuRow).join('')+'</tbody></table></div>':'')+
+    (enjeuxMoyen.length?'<div class="avoid-break"><div style="font-size:10px;font-weight:700;color:#d97706;margin:8px 0 4px;">MOYEN ('+enjeuxMoyen.length+')</div><table><tbody>'+enjeuxMoyen.map(enjeuRow).join('')+'</tbody></table></div>':'')+
+    (enjeuxFaible.length?'<div class="avoid-break"><div style="font-size:10px;font-weight:700;color:#16a34a;margin:8px 0 4px;">FAIBLE ('+enjeuxFaible.length+')</div><table><tbody>'+enjeuxFaible.map(enjeuRow).join('')+'</tbody></table></div>':'')+
+
+    /* ═══ PAGE 3 — ALENTOURS ═══ */
+    (alentourItems.length>0?
+      '<div class="page-break"></div>'+
+      '<div class="sec">Quels sont les projets similaires aux alentours ?</div>'+
+      '<div class="panel avoid-break"><div class="ptitle"><span>Projets similaires alentours</span><span>'+alentourItems.length+' resultat(s)</span></div>'+
+      '<table><tbody>'+alentourItems.map(function(a){
+        return '<tr style="border-bottom:1px solid #f1f5f9;">'+
+          '<td style="padding:5px 8px;font-size:13px;width:28px;">&#x1F3EB;</td>'+
+          '<td style="padding:5px 8px 5px 0;font-weight:600;font-size:11px;">'+(a.nom||a.tags&&(a.tags.name||a.tags.amenity)||'Etablissement')+'</td>'+
+          '<td style="padding:5px 8px;text-align:right;font-size:10px;color:#64748b;">'+(a.type||'')+'</td>'+
+          '<td style="padding:5px 8px;text-align:right;font-size:10px;color:#003395;font-weight:600;">'+(a.dist?(a.dist<1000?a.dist+' m':(a.dist/1000).toFixed(1)+' km'):'')+'</td>'+
+        '</tr>';
+      }).join('')+'</tbody></table></div>':'')+
+
+    /* ═══ PAGE 4 — CHECKLIST ═══ */
+    (checkItems.length>0?
+      '<div class="page-break"></div>'+
+      '<div class="sec">Que faire ensuite ?</div>'+
+      '<div class="panel avoid-break">'+
+        '<div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:8px 10px;margin-bottom:8px;display:flex;justify-content:space-between;"><span style="font-size:12px;font-weight:700;color:#1e293b;">Checklist administrative</span><span style="font-size:10px;color:#64748b;">'+checkItems.length+' etape(s)</span></div>'+
+        '<div class="prog"><div class="prog-fill" style="width:0%;background:#003395;"></div></div>'+
+        '<table><tbody>'+checkItems.map(checkRow).join('')+'</tbody></table>'+
+      '</div>':'')+
+
+    /* ═══ PAGE 5 — SIMULATION ═══ */
+    '<div class="page-break"></div>'+
+    '<div class="sec">Simulation du projet</div>'+
+    '<div class="two-col">'+
+
+      /* Colonne gauche : jauges */
+      '<div class="panel avoid-break">'+
+        '<div class="ptitle">Simulation -- '+typeLabel+'</div>'+
+        '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">'+
+          (tailleNom?'<span style="background:#e0e7ff;color:#3730a3;font-size:9px;padding:2px 7px;border-radius:4px;">'+tailleNom+'</span>':'')+
+          (supHa?'<span style="background:#e0e7ff;color:#3730a3;font-size:9px;padding:2px 7px;border-radius:4px;">'+supHa+'</span>':'')+
+          (A.position?'<span style="background:#e0e7ff;color:#3730a3;font-size:9px;padding:2px 7px;border-radius:4px;">Projet positionne</span>':'')+
+        '</div>'+
+
+        /* Durée */
+        '<div style="margin-bottom:12px;">'+
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;">'+
+            '<div style="font-size:10px;font-weight:700;">Duree estimee</div>'+
+            '<div class="jauge-val" style="color:'+dureeColor+';">'+simDureeStr+'</div>'+
+          '</div>'+
+          '<div class="prog"><div class="prog-fill" style="width:'+Math.min(100,Math.round(simDuree/72*100))+'%;background:'+dureeColor+';"></div></div>'+
+          '<div class="jauge-sous">De l\'etude prealable a la reception des travaux.</div>'+
+        '</div>'+
+
+        /* Complexité */
+        '<div style="margin-bottom:12px;">'+
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;">'+
+            '<div style="font-size:10px;font-weight:700;">Complexite administrative</div>'+
+            '<div class="jauge-val" style="color:'+complexColor+';">'+simComplexLbl+' ('+simComplex+'/100)</div>'+
+          '</div>'+
+          '<div class="prog"><div class="prog-fill" style="width:'+simComplex+'%;background:'+complexColor+';"></div></div>'+
+          '<div class="jauge-sous">Nombre de procedures, consultations et acteurs impliques.</div>'+
+        '</div>'+
+
+        /* Impact environnemental */
+        '<div>'+
+          '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;">'+
+            '<div style="font-size:10px;font-weight:700;">Impact environnemental</div>'+
+            '<div class="jauge-val" style="color:'+impactColor+';">'+simImpactLbl+' ('+simImpact+'/100)</div>'+
+          '</div>'+
+          '<div class="prog"><div class="prog-fill" style="width:'+simImpact+'%;background:'+impactColor+';"></div></div>'+
+          '<div class="jauge-sous">'+(simImpactPos?'Ce projet a un bilan environnemental favorable.':'Impact sur les sols, l\'eau et la biodiversite.')+'</div>'+
+        '</div>'+
+      '</div>'+
+
+      /* Colonne droite : contexte + note globale */
+      '<div>'+
+        /* Note globale */
+        '<div class="panel" style="text-align:center;margin-bottom:10px;">'+
+          '<div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Note globale du projet</div>'+
+          '<div style="font-size:38px;font-weight:900;color:'+scoreCouleur+';line-height:1;">'+scoreGlobal.toFixed(1)+'<span style="font-size:20px;color:#94a3b8;">/5</span></div>'+
+          '<div style="font-size:9px;color:#94a3b8;margin-top:4px;">Score calcule sur les 4 axes ci-dessous</div>'+
+          '<div style="margin-top:10px;">'+
+            barreAxe('Economique',    axeEco,  axeColors.Economique)+
+            barreAxe('Environnemental',axeEnv, axeColors.Environnemental)+
+            barreAxe('Societal',      axeSoc,  axeColors.Societal)+
+            barreAxe('Politique',     axePol,  axeColors.Politique)+
+          '</div>'+
+        '</div>'+
+        /* Facteurs */
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">'+
+          '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:2px;">Zones detectees</div><div style="font-weight:700;font-size:11px;color:#d97706;">'+zonesResultats.length+'</div></div>'+
+          '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:2px;">Enjeux eleves</div><div style="font-weight:700;font-size:11px;color:#dc2626;">'+nbEleve+'</div></div>'+
+          '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:2px;">Superficie</div><div style="font-weight:700;font-size:11px;">'+supHa+'</div></div>'+
+          '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;margin-bottom:2px;">Procedures</div><div style="font-weight:700;font-size:11px;">'+(A.taille<=1?'1-3':A.taille===2?'3-5':A.taille===3?'5-8':'8-15')+'</div></div>'+
+        '</div>'+
+      '</div>'+
+    '</div>'+
+
+    /* ═══ PAGE 6 — CONTACTS ═══ */
+    '<div class="page-break"></div>'+
+    '<div class="sec">Qui contacter si vous souhaitez echanger avec un expert ?</div>'+
+    '<div class="panel" style="margin-bottom:12px;">'+
+      '<div style="font-size:11px;font-weight:700;color:#1e293b;margin-bottom:4px;">Contacter les acteurs du territoire</div>'+
+      '<div style="font-size:10px;color:#64748b;margin-bottom:6px;">Experts, services de l\'Etat et partenaires locaux</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">'+
+        (typeLabel?'<span style="background:#003395;color:#fff;font-size:9px;padding:2px 8px;border-radius:4px;">'+typeLabel+'</span>':'')+
+        (tailleNom?'<span style="background:#e2e8f0;color:#1e293b;font-size:9px;padding:2px 8px;border-radius:4px;">'+tailleNom+'</span>':'')+
+        (posLat?'<span style="background:#e2e8f0;color:#1e293b;font-size:9px;padding:2px 8px;border-radius:4px;">'+posLat+posLng+'</span>':'')+
+      '</div>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'+contacts.map(contactCard).join('')+'</div>'+
+
+    /* ═══ PAGE 7 — EVALUATION GLOBALE ═══ */
+    '<div class="page-break"></div>'+
+    '<div class="sec">Evaluation globale de votre projet : <span style="color:'+scoreCouleur+';">'+scoreStr+'</span></div>'+
+
+    '<div class="two-col" style="align-items:start;">'+
+      /* Radar */
+      '<div>'+
+        '<div style="text-align:center;margin-bottom:10px;">'+radarHtml+'</div>'+
+      '</div>'+
+
+      /* Scores + explication */
+      '<div>'+
+        '<div class="panel">'+
+          '<div style="text-align:center;margin-bottom:14px;">'+
+            '<div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Note globale</div>'+
+            '<div style="font-size:42px;font-weight:900;color:'+scoreCouleur+';line-height:1;">'+scoreGlobal.toFixed(1)+'<span style="font-size:22px;color:#94a3b8;">/5</span></div>'+
+            '<div style="font-size:9px;color:#94a3b8;margin-top:4px;">Moyenne ponderee des 4 axes</div>'+
+          '</div>'+
+          barreAxe('Economique (complexite proc.)',axeEco,axeColors.Economique)+
+          barreAxe('Environnemental (impact)',    axeEnv,axeColors.Environnemental)+
+          barreAxe('Societal (nb enjeux eleves)', axeSoc,axeColors.Societal)+
+          barreAxe('Politique (zones + envergure)',axePol,axeColors.Politique)+
+        '</div>'+
+
+        '<div class="panel" style="margin-top:10px;">'+
+          '<div class="ptitle">Methode de calcul</div>'+
+          '<div style="font-size:9.5px;color:#475569;line-height:1.5;">'+
+            '<div style="margin-bottom:4px;"><strong>Economique :</strong> complexite administrative / 100 × 5</div>'+
+            '<div style="margin-bottom:4px;"><strong>Environnemental :</strong> impact environnemental / 100 × 5</div>'+
+            '<div style="margin-bottom:4px;"><strong>Societal :</strong> proportion d\'enjeux de niveau eleve sur le total</div>'+
+            '<div><strong>Politique :</strong> nombre de zones sensibles + envergure du projet</div>'+
+          '</div>'+
+        '</div>'+
+      '</div>'+
+    '</div>'+
+
+    '<div class="footer">DDT 90 -- Outil d\'aide a la decision -- '+dateStr+' -- Document non contractuel'+(communeNom?' -- Commune de '+communeNom:'')+'</div>'+
+  '</body></html>';
+
+  var win = window.open('','_blank','width=900,height=700');
+  if (!win) { alert("Veuillez autoriser les pop-ups pour generer le rapport PDF."); return; }
+  win.document.write(html);
+  win.document.close();
+}
+
+function genererContactsData() {
+  var result = [];
+  var cOld=document.getElementById('contact-cadastre');if(cOld)cOld.remove();var lC=document.getElementById('contacts-liste');if(lC){var cD=document.createElement('div');cD.id='contact-cadastre';cD.className='contact-groupe';cD.innerHTML='<div class="contact-groupe-titre"><span class="groupe-ico">??</span><span>Foncier &amp; Cadastre</span></div>'+creerCarteContactRPG('?? SPF Belfort','Cadastre, état hypothécaire, propriétaires.','0809 101 030','','https://www.cadastre.gouv.fr','Recommandé')+creerCarteContactRPG('?? Géoportail Urbanisme','PLU, servitudes, zonage avant PC.','','','https://www.geoportail-urbanisme.gouv.fr','Recommandé');lC.appendChild(cD);}
+  document.querySelectorAll('#contacts-liste .contact-card').forEach(function(card) {
+    var nomEl  = card.querySelector('.contact-nom');
+    var roleEl = card.querySelector('.contact-role');
+    var prioEl = card.querySelector('.contact-priorite');
+    var tel = '', email = '';
+    card.querySelectorAll('a').forEach(function(a) {
+      if (a.href && a.href.indexOf('tel:')    === 0) tel   = a.textContent.trim();
+      if (a.href && a.href.indexOf('mailto:') === 0) email = a.textContent.trim();
+    });
+    var noteEl = card.querySelector('[style*="border-left"]');
+    result.push({
+      nom:      nomEl  ? nomEl.textContent.trim()  : '',
+      role:     roleEl ? roleEl.textContent.trim() : '',
+      tel:      tel,
+      email:    email,
+      note:     noteEl ? noteEl.textContent.replace(/^[i\s]+/, '').trim() : '',
+      priorite: prioEl ? prioEl.textContent.trim() : '',
+    });
+  });
+  if (result.length === 0) {
+    result.push({nom:'DDT 90 -- Direction Departementale des Territoires',role:'Service instructeur : urbanisme, agriculture, environnement, risques.',tel:'03 84 58 86 00',email:'ddt@territoire-de-belfort.gouv.fr',note:'Interlocuteur principal pour tout projet sur le Territoire de Belfort.',priorite:'Obligatoire'});
+  }
+  return result;
+}
